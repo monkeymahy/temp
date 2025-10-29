@@ -8,19 +8,15 @@ import dgl.function as fn
 from .pnaconv import PNAConvTower
 
 
-
 class NonLinearClassifier(nn.Module):
-    def __init__(self, 
-                 input_dim, 
-                 num_classes, 
-                 hidden_dim=512, 
-                 dropout=0.3, 
-                 act=nn.ReLU):
+    def __init__(
+        self, input_dim, num_classes, hidden_dim=512, dropout=0.3, act=nn.ReLU
+    ):
         """
         A 3-layer MLP with linear outputs
 
         Args:
-            input_dim (int): Dimension of the input tensor 
+            input_dim (int): Dimension of the input tensor
             num_classes (int): Dimension of the output logits
             dropout (float, optional): Dropout used after each linear layer. Defaults to 0.3.
             act (nn.Module, optional): Activation function. Defaults to nn.ReLU.
@@ -67,14 +63,17 @@ class NonLinearClassifier(nn.Module):
 class MLP(nn.Module):
     """"""
 
-    def __init__(self, 
-                 num_layers, 
-                 input_dim, 
-                 hidden_dim, 
-                 output_dim, 
-                 norm=nn.BatchNorm1d,
-                 last_norm=False, 
-                 act=nn.ReLU):
+    # 20251029
+    def __init__(
+        self,
+        num_layers,
+        input_dim,
+        hidden_dim,
+        output_dim,
+        norm=nn.BatchNorm1d,
+        last_norm=False,
+        act=nn.ReLU,
+    ):
         """
         MLP with linear output
         Args:
@@ -86,7 +85,18 @@ class MLP(nn.Module):
         Raises:
             ValueError: If the given number of layers is <1
         """
-        super(MLP, self).__init__()
+        assert isinstance(num_layers, int) and num_layers > 0
+        assert isinstance(input_dim, int) and input_dim > 0
+        # TODO hidden_dim可以为0吗？有一处MLP实例化时hidden_dim传0了
+        assert isinstance(hidden_dim, int) and hidden_dim >= 0
+        assert isinstance(output_dim, int) and output_dim > 0
+        assert issubclass(norm, nn.Module)
+        assert isinstance(last_norm, bool) or issubclass(last_norm, nn.Module)
+        # TODO 此处存在参数传递bug，不影响程序执行，暂时保留
+        assert issubclass(act, nn.Module)
+
+        super().__init__()
+
         self.linear_or_not = True  # default is linear model
         self.num_layers = num_layers
         self.output_dim = output_dim
@@ -99,7 +109,7 @@ class MLP(nn.Module):
         elif num_layers == 1:
             # Linear model
             self.linear = nn.Linear(input_dim, output_dim)
-        else:
+        else:  # TODO完全可以合并到一个ModuleList中
             # Multi-layer model
             self.linear_or_not = False
             self.linears = torch.nn.ModuleList()
@@ -111,13 +121,14 @@ class MLP(nn.Module):
                 self.linears.append(nn.Linear(hidden_dim, hidden_dim, bias=False))
                 self.norms.append(self.norm(hidden_dim))
             self.linears.append(nn.Linear(hidden_dim, output_dim))
-        
+
         if self.last_norm:
             self.post_norm = self.norm(output_dim)
-        
+
         for m in self.modules():
             self.weights_init(m)
 
+    # 20251029
     def weights_init(self, m):
         if isinstance(m, nn.Linear):
             torch.nn.init.kaiming_uniform_(m.weight.data)
@@ -216,23 +227,27 @@ class Scale(nn.Module):
     """
     Scale vector by element multiplications.
     """
-    def __init__(self, dim, init_value=1.0, trainable=True):
+
+    # 20251029
+    def __init__(
+        self,
+        dim,
+        init_value=1.0,
+        trainable=True,
+    ):
         super().__init__()
-        self.scale = nn.Parameter(init_value * torch.ones(dim), requires_grad=trainable)
+
+        self.scale = nn.Parameter(
+            init_value * torch.ones(dim),
+            requires_grad=trainable,
+        )
 
     def forward(self, x):
         return x * self.scale
 
 
 class EdgeMPNN(nn.Module):
-    def __init__(
-        self,
-        node_dim,
-        edge_dim,
-        mlp_ratio=4,
-        drop=0.,
-        drop_path=0.
-    ):
+    def __init__(self, node_dim, edge_dim, mlp_ratio=4, drop=0.0, drop_path=0.0):
         """
         This module implements Eq. 2 from the paper where the edge features are
         updated using the node features at the endpoints.
@@ -246,56 +261,53 @@ class EdgeMPNN(nn.Module):
         super(EdgeMPNN, self).__init__()
         # edge mpnn
         self.proj = MLP(1, node_dim, 0, edge_dim)
-        self.norm_drop = nn.Sequential(nn.BatchNorm1d(edge_dim),
-                                       nn.Dropout(drop))
+        self.norm_drop = nn.Sequential(nn.BatchNorm1d(edge_dim), nn.Dropout(drop))
 
         self.norm1 = nn.LayerNorm(edge_dim)
-        self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.layer_scale1 = Scale(dim=edge_dim)
         self.res_scale1 = Scale(dim=edge_dim)
 
         self.norm2 = nn.LayerNorm(edge_dim)
-        self.mlp = MLP(2, edge_dim, edge_dim*mlp_ratio, edge_dim, nn.LayerNorm, nn.Mish)
-        self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.mlp = MLP(
+            2, edge_dim, edge_dim * mlp_ratio, edge_dim, nn.LayerNorm, nn.Mish
+        )
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.layer_scale2 = Scale(dim=edge_dim)
         self.res_scale2 = Scale(dim=edge_dim)
 
     def message_passing(self, g, h, he):
         with g.local_scope():
-            g.ndata['h'] = h
-            out_src = self.proj(g.ndata['h'])
-            out_dst = self.proj(g.ndata['h'])
-            g.srcdata.update({'out_src': out_src})
-            g.dstdata.update({'out_dst': out_dst})
-            g.apply_edges(fn.u_add_v('out_src', 'out_dst', 'out'))
-            he = he + g.edata['out']
+            g.ndata["h"] = h
+            out_src = self.proj(g.ndata["h"])
+            out_dst = self.proj(g.ndata["h"])
+            g.srcdata.update({"out_src": out_src})
+            g.dstdata.update({"out_dst": out_dst})
+            g.apply_edges(fn.u_add_v("out_src", "out_dst", "out"))
+            he = he + g.edata["out"]
         return self.norm_drop(he)
 
     def forward(self, g, h, he):
-        he = self.res_scale1(he) + \
-            self.layer_scale1(
-                self.drop_path1(
-                    self.message_passing(g, h, self.norm1(he))
-                )
-            )
-        he = self.res_scale2(he) + \
-            self.layer_scale2(
-                self.drop_path2(
-                    self.mlp(self.norm2(he))
-                )
-            )
+        he = self.res_scale1(he) + self.layer_scale1(
+            self.drop_path1(self.message_passing(g, h, self.norm1(he)))
+        )
+        he = self.res_scale2(he) + self.layer_scale2(
+            self.drop_path2(self.mlp(self.norm2(he)))
+        )
         return he
 
 
 class NodeMPNN(nn.Module):
+
+    # 20251029
     def __init__(
         self,
         node_dim,
         edge_dim,
         delta,
         mlp_ratio=4,
-        drop=0.,
-        drop_path=0.
+        drop=0.0,
+        drop_path=0.0,
     ):
         """
 
@@ -305,42 +317,52 @@ class NodeMPNN(nn.Module):
             output_dim (int): [description]
             num_layers (int, optional): [description].
         """
-        super(NodeMPNN, self).__init__()
+        super().__init__()
+
         self.norm1 = nn.LayerNorm(node_dim)
         self.conv = PNAConvTower(
-                        in_size=node_dim, 
-                        out_size=node_dim, 
-                        aggregators=['sum', 'max'], # ['sum', 'max', 'min']
-                        scalers=['identity'], # ['identity', 'amplification', 'attenuation']
-                        delta=delta, 
-                        dropout=drop,
-                        edge_feat_size=edge_dim)
-        self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+            in_size=node_dim,
+            out_size=node_dim,
+            aggregators=["sum", "max"],  # ['sum', 'max', 'min']
+            scalers=["identity"],  # ['identity', 'amplification', 'attenuation']
+            delta=delta,
+            dropout=drop,
+            edge_feat_size=edge_dim,
+        )
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.layer_scale1 = Scale(dim=node_dim)
         self.res_scale1 = Scale(dim=node_dim)
 
         self.norm2 = nn.LayerNorm(node_dim)
-        self.mlp = MLP(2, node_dim, node_dim*mlp_ratio, node_dim, nn.LayerNorm, nn.Mish)
-        self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.mlp = MLP(
+            2,
+            node_dim,
+            node_dim * mlp_ratio,
+            node_dim,
+            nn.LayerNorm,
+            nn.Mish,  # TODO 此处存在参数传递bug
+            # num_layers=2,
+            # input_dim=node_dim,
+            # hidden_dim=node_dim * mlp_ratio,
+            # output_dim=node_dim,
+            # norm=nn.LayerNorm,
+            # last_norm=False,
+            # act=nn.ReLU,
+        )
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.layer_scale2 = Scale(dim=node_dim)
         self.res_scale2 = Scale(dim=node_dim)
 
     def forward(self, g, h, he):
-        h = self.res_scale1(h) + \
-            self.layer_scale1(
-                self.drop_path1(
-                    self.conv(g, self.norm1(h), he)
-                )
-            )
-        h = self.res_scale2(h) + \
-            self.layer_scale2(
-                self.drop_path2(
-                    self.mlp(self.norm2(h))
-                )
-            )
+        h = self.res_scale1(h) + self.layer_scale1(
+            self.drop_path1(self.conv(g, self.norm1(h), he))
+        )
+        h = self.res_scale2(h) + self.layer_scale2(
+            self.drop_path2(self.mlp(self.norm2(h)))
+        )
         return h
-    
-    
+
+
 class simpleMLP(nn.Sequential):
     r"""
     Description
@@ -374,16 +396,14 @@ class MessageNorm(nn.Module):
 
     def __init__(self, learn_scale=False):
         super(MessageNorm, self).__init__()
-        self.scale = nn.Parameter(
-            torch.FloatTensor([1.0]), requires_grad=learn_scale
-        )
+        self.scale = nn.Parameter(torch.FloatTensor([1.0]), requires_grad=learn_scale)
 
     def forward(self, feats, msg, p=2):
         msg = F.normalize(msg, p=2, dim=-1)
         feats_norm = feats.norm(p=p, dim=-1, keepdim=True)
         return msg * feats_norm * self.scale
 
-    
+
 class GENConv(nn.Module):
     r"""
     Description
@@ -447,12 +467,8 @@ class GENConv(nn.Module):
             if learn_beta and self.aggr == "softmax"
             else beta
         )
-        self.p = (
-            nn.Parameter(torch.Tensor([p]), requires_grad=True)
-            if learn_p
-            else p
-        )
-        
+        self.p = nn.Parameter(torch.Tensor([p]), requires_grad=True) if learn_p else p
+
     def forward(self, g, node_feats, edge_feats):
         with g.local_scope():
             # Node and edge feature size need to match.
@@ -462,7 +478,9 @@ class GENConv(nn.Module):
 
             if self.aggr == "softmax":
                 g.edata["m"] = F.relu(g.edata["m"]) + self.eps
-                g.edata["a"] = dgl.nn.functional.edge_softmax(g, g.edata["m"] * self.beta)
+                g.edata["a"] = dgl.nn.functional.edge_softmax(
+                    g, g.edata["m"] * self.beta
+                )
                 g.update_all(
                     lambda edge: {"x": edge.data["m"] * edge.data["a"]},
                     fn.sum("x", "m"),
@@ -479,9 +497,7 @@ class GENConv(nn.Module):
                 g.ndata["m"] = torch.pow(g.ndata["m"], self.p)
 
             else:
-                raise NotImplementedError(
-                    f"Aggregator {self.aggr} is not supported."
-                )
+                raise NotImplementedError(f"Aggregator {self.aggr} is not supported.")
 
             if self.msg_norm is not None:
                 g.ndata["m"] = self.msg_norm(node_feats, g.ndata["m"])
@@ -492,15 +508,7 @@ class GENConv(nn.Module):
 
 
 class NodeMPNNV2(nn.Module):
-    def __init__(
-        self,
-        node_dim,
-        edge_dim,
-        delta,
-        mlp_ratio=4,
-        drop=0.,
-        drop_path=0.
-    ):
+    def __init__(self, node_dim, edge_dim, delta, mlp_ratio=4, drop=0.0, drop_path=0.0):
         """
 
         Args:
@@ -512,27 +520,23 @@ class NodeMPNNV2(nn.Module):
         super(NodeMPNNV2, self).__init__()
         self.norm1 = nn.LayerNorm(node_dim)
         self.conv = GENConv(node_dim, node_dim, learn_beta=True, learn_p=True)
-        self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.layer_scale1 = Scale(dim=node_dim)
         self.res_scale1 = Scale(dim=node_dim)
 
         self.norm2 = nn.LayerNorm(node_dim)
-        self.mlp = MLP(2, node_dim, node_dim*mlp_ratio, node_dim, nn.LayerNorm, nn.Mish)
-        self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.mlp = MLP(
+            2, node_dim, node_dim * mlp_ratio, node_dim, nn.LayerNorm, nn.Mish
+        )
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.layer_scale2 = Scale(dim=node_dim)
         self.res_scale2 = Scale(dim=node_dim)
 
     def forward(self, g, h, he):
-        h = self.res_scale1(h) + \
-            self.layer_scale1(
-                self.drop_path1(
-                    self.conv(g, self.norm1(h), he)
-                )
-            )
-        h = self.res_scale2(h) + \
-            self.layer_scale2(
-                self.drop_path2(
-                    self.mlp(self.norm2(h))
-                )
-            )
+        h = self.res_scale1(h) + self.layer_scale1(
+            self.drop_path1(self.conv(g, self.norm1(h), he))
+        )
+        h = self.res_scale2(h) + self.layer_scale2(
+            self.drop_path2(self.mlp(self.norm2(h)))
+        )
         return h

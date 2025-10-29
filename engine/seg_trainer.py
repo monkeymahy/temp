@@ -8,6 +8,13 @@ import numpy as np
 from torch_ema import ExponentialMovingAverage
 from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
 import wandb
+import sys
+import swanlab
+
+torch.set_float32_matmul_precision("high")  # may be faster if GPU support TF32
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
 from dataloader.mfcad import MFCADDataset
 from dataloader.mfcad2 import MFCAD2Dataset
@@ -16,14 +23,13 @@ from utils.misc import seed_torch, init_logger, print_num_params
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("high")  # may be faster if GPU support TF32
-    os.environ["WANDB_API_KEY"] = "##################"
-    os.environ["WANDB_MODE"] = "offline"
+    # os.environ["WANDB_API_KEY"] = "##################"
+    # os.environ["WANDB_MODE"] = "offline"
 
     # start a new wandb run to track this script
     dataset_name = "MFCAD2"  # option: MFCAD2 MFCAD
     time_str = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
-    wandb.init(
+    swanlab.init(
         # set the wandb project where this run will be logged
         project="aagnet_" + dataset_name,
         # track hyperparameters and run metadata
@@ -59,10 +65,10 @@ if __name__ == "__main__":
         },
     )
 
-    print(wandb.config)
-    seed_torch(wandb.config["seed"])
-    device = wandb.config["device"]
-    dataset = wandb.config["dataset"]
+    print(swanlab.config)
+    seed_torch(swanlab.config["seed"])
+    device = swanlab.config["device"]
+    dataset = swanlab.config["dataset"]
     if dataset_name == "MFCAD":
         Dataset = MFCADDataset
     elif dataset_name == "MFCAD2":
@@ -73,29 +79,29 @@ if __name__ == "__main__":
 
     model = AAGNetSegmentor(
         num_classes=n_classes,
-        arch=wandb.config["architecture"],
-        edge_attr_dim=wandb.config["edge_attr_dim"],
-        node_attr_dim=wandb.config["node_attr_dim"],
-        edge_attr_emb=wandb.config["edge_attr_emb"],
-        node_attr_emb=wandb.config["node_attr_emb"],
-        edge_grid_dim=wandb.config["edge_grid_dim"],
-        node_grid_dim=wandb.config["node_grid_dim"],
-        edge_grid_emb=wandb.config["edge_grid_emb"],
-        node_grid_emb=wandb.config["node_grid_emb"],
-        num_layers=wandb.config["num_layers"],
-        delta=wandb.config["delta"],
-        mlp_ratio=wandb.config["mlp_ratio"],
-        drop=wandb.config["drop"],
-        drop_path=wandb.config["drop_path"],
-        head_hidden_dim=wandb.config["head_hidden_dim"],
-        conv_on_edge=wandb.config["conv_on_edge"],
-        use_uv_gird=wandb.config["use_uv_gird"],
-        use_edge_attr=wandb.config["use_edge_attr"],
-        use_face_attr=wandb.config["use_face_attr"],
+        arch=swanlab.config["architecture"],
+        edge_attr_dim=swanlab.config["edge_attr_dim"],
+        node_attr_dim=swanlab.config["node_attr_dim"],
+        edge_attr_emb=swanlab.config["edge_attr_emb"],
+        node_attr_emb=swanlab.config["node_attr_emb"],
+        edge_grid_dim=swanlab.config["edge_grid_dim"],
+        node_grid_dim=swanlab.config["node_grid_dim"],
+        edge_grid_emb=swanlab.config["edge_grid_emb"],
+        node_grid_emb=swanlab.config["node_grid_emb"],
+        num_layers=swanlab.config["num_layers"],
+        delta=swanlab.config["delta"],
+        mlp_ratio=swanlab.config["mlp_ratio"],
+        drop=swanlab.config["drop"],
+        drop_path=swanlab.config["drop_path"],
+        head_hidden_dim=swanlab.config["head_hidden_dim"],
+        conv_on_edge=swanlab.config["conv_on_edge"],
+        use_uv_gird=swanlab.config["use_uv_gird"],
+        use_edge_attr=swanlab.config["use_edge_attr"],
+        use_face_attr=swanlab.config["use_face_attr"],
     )
     model = model.to(device)
     total_params = print_num_params(model)
-    wandb.config["total_params"] = total_params
+    swanlab.config["total_params"] = total_params
 
     # model_param = torch.load("E:\\AAGNet\\outpout\\weight_38-epoch.pth", map_location=device)
     # model.load_state_dict(model_param)
@@ -118,10 +124,10 @@ if __name__ == "__main__":
         num_threads=8,
     )
     train_loader = train_dataset.get_dataloader(
-        batch_size=wandb.config["batch_size"], pin_memory=True
+        batch_size=swanlab.config["batch_size"], pin_memory=True
     )
     val_loader = val_dataset.get_dataloader(
-        batch_size=wandb.config["batch_size"],
+        batch_size=swanlab.config["batch_size"],
         shuffle=False,
         drop_last=False,
         pin_memory=True,
@@ -130,11 +136,11 @@ if __name__ == "__main__":
     seg_loss = nn.CrossEntropyLoss()
     opt = torch.optim.AdamW(
         model.parameters(),
-        lr=wandb.config["lr"],
-        weight_decay=wandb.config["weight_decay"],
+        lr=swanlab.config["lr"],
+        weight_decay=swanlab.config["weight_decay"],
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max=wandb.config["epochs"], eta_min=0
+        opt, T_max=swanlab.config["epochs"], eta_min=0
     )
 
     train_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)
@@ -144,7 +150,7 @@ if __name__ == "__main__":
     val_seg_iou = MulticlassJaccardIndex(num_classes=n_classes).to(device)
 
     iters = len(train_loader)
-    ema_decay = wandb.config["ema_decay_per_epoch"] ** (1 / iters)
+    ema_decay = swanlab.config["ema_decay_per_epoch"] ** (1 / iters)
     print(f"EMA decay: {ema_decay}")
     ema = ExponentialMovingAverage(model.parameters(), decay=ema_decay)
 
@@ -156,7 +162,7 @@ if __name__ == "__main__":
     if not os.path.exists(save_path):
         os.mkdir(save_path)
     logger = init_logger(os.path.join(save_path, "log.txt"))
-    for epoch in range(wandb.config["epochs"]):
+    for epoch in range(swanlab.config["epochs"]):
         logger.info(f"------------- Now start epoch {epoch}------------- ")
         model.train()
         # train_per_inst_acc = []
@@ -200,7 +206,7 @@ if __name__ == "__main__":
                       train_seg_acc: {mean_train_seg_acc}, \
                       train_seg_iou: {mean_train_seg_iou}"
         )
-        wandb.log(
+        swanlab.log(
             {
                 "epoch": epoch,
                 "train_loss": mean_train_loss,
@@ -237,7 +243,7 @@ if __name__ == "__main__":
                               val_seg_acc: {mean_val_seg_acc}, \
                               val_seg_iou: {mean_val_seg_iou}"
                 )
-                wandb.log(
+                swanlab.log(
                     {
                         "epoch": epoch,
                         "val_loss": mean_val_loss,
@@ -271,7 +277,7 @@ if __name__ == "__main__":
         num_threads=8,
     )
     test_loader = test_dataset.get_dataloader(
-        batch_size=wandb.config["batch_size"], pin_memory=True
+        batch_size=swanlab.config["batch_size"], pin_memory=True
     )
 
     test_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)
@@ -305,7 +311,7 @@ if __name__ == "__main__":
                       test_seg_acc: {mean_test_seg_acc}, \
                       test_seg_iou: {mean_test_seg_iou}"
         )
-        wandb.log(
+        swanlab.log(
             {
                 "test_loss": mean_test_loss,
                 "test_seg_acc": mean_test_seg_acc,

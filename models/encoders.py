@@ -9,7 +9,6 @@ from .layers import NodeMPNN, EdgeMPNN, NodeMPNNV2
 from .layers import GENConv
 
 
-
 class UVNetGraphEncoder(nn.Module):
     def __init__(
         self,
@@ -109,20 +108,19 @@ class GCN(nn.Module):
         num_layers,
         delta,
         mlp_ratio=4,
-        drop=0.,
-        drop_path=0.,
+        drop=0.0,
+        drop_path=0.0,
         conv_on_edge=True,
     ):
         super(GCN, self).__init__()
         self.num_layers = num_layers
-        gcn_type = 'GraphConv'
-        assert gcn_type in ['GraphConv', 'EdgeConv', 'TAGConv']
+        gcn_type = "GraphConv"
+        assert gcn_type in ["GraphConv", "EdgeConv", "TAGConv"]
         GCNLayer = getattr(dgl.nn, gcn_type)
         # List of layers for node feature message passing
         self.node_conv_layers = torch.nn.ModuleList()
         for layer in range(self.num_layers):
-            self.node_conv_layers.append(
-                GCNLayer(node_dim, node_dim))
+            self.node_conv_layers.append(GCNLayer(node_dim, node_dim))
 
         # Linear function for graph poolings of output of each layer
         # which maps the output of different layers into a prediction score
@@ -137,7 +135,7 @@ class GCN(nn.Module):
             # Update node features
             h = self.node_conv_layers[i](g, h)
             h = F.relu(h)
-        
+
         local_feat = h
         # perform graph sum pooling over all nodes
         global_feat = self.linear(self.pool(g, local_feat))
@@ -152,13 +150,13 @@ class SAGE(nn.Module):
         num_layers,
         delta,
         mlp_ratio=4,
-        drop=0.,
-        drop_path=0.,
+        drop=0.0,
+        drop_path=0.0,
         conv_on_edge=True,
     ):
         super(SAGE, self).__init__()
         self.num_layers = num_layers
-        aggregator_type='pool'
+        aggregator_type = "pool"
         # List of layers for node feature message passing
         self.node_conv_layers = torch.nn.ModuleList()
 
@@ -180,7 +178,7 @@ class SAGE(nn.Module):
             # Update node features
             h = self.node_conv_layers[i](g, h)
             h = F.relu(h)
-        
+
         local_feat = h
         # perform graph sum pooling over all nodes
         global_feat = self.linear(self.pool(g, local_feat))
@@ -188,31 +186,35 @@ class SAGE(nn.Module):
 
 
 class GIN(nn.Module):
-    def __init__(self, 
-                 node_dim,
-                 edge_dim,
-                 num_layers,
-                 delta,
-                 mlp_ratio=4,
-                 drop=0.,
-                 drop_path=0.,
-                 conv_on_edge=True):
+    def __init__(
+        self,
+        node_dim,
+        edge_dim,
+        num_layers,
+        delta,
+        mlp_ratio=4,
+        drop=0.0,
+        drop_path=0.0,
+        conv_on_edge=True,
+    ):
         super().__init__()
         input_dim = node_dim
-        output_dim = node_dim 
+        output_dim = node_dim
         hidden_dim = node_dim
-        num_mlp_layers=2
+        num_mlp_layers = 2
         self.ginlayers = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
         # five-layer GCN with l-layer MLP aggregator and sum-neighbor-pooling scheme
-        for layer in range(num_layers - 1): # excluding the input layer
+        for layer in range(num_layers - 1):  # excluding the input layer
             if layer == 0:
                 mlp = MLP(num_mlp_layers, input_dim, hidden_dim, hidden_dim)
             else:
                 mlp = MLP(num_mlp_layers, hidden_dim, hidden_dim, hidden_dim)
-            self.ginlayers.append(dgl.nn.GINConv(mlp, learn_eps=False, aggregator_type='max')) # set to True if learning epsilon
+            self.ginlayers.append(
+                dgl.nn.GINConv(mlp, learn_eps=False, aggregator_type="max")
+            )  # set to True if learning epsilon
             self.batch_norms.append(nn.LayerNorm(hidden_dim))
-        
+
         # linear functions for graph sum poolings of output of each layer
         self.linear_prediction = nn.ModuleList()
         for layer in range(num_layers):
@@ -220,10 +222,12 @@ class GIN(nn.Module):
                 self.linear_prediction.append(nn.Linear(input_dim, output_dim))
             else:
                 self.linear_prediction.append(nn.Linear(hidden_dim, output_dim))
-        
+
         self.drop1 = nn.Dropout(0.3)
         self.drop = nn.Dropout(0.5)
-        self.pool = dgl.nn.AvgPooling() # change to mean readout (AvgPooling) on social network datasets
+        self.pool = (
+            dgl.nn.AvgPooling()
+        )  # change to mean readout (AvgPooling) on social network datasets
 
     def forward(self, g, h, he):
         # list of hidden representation at each layer (including the input layer)
@@ -233,7 +237,7 @@ class GIN(nn.Module):
             h = self.batch_norms[i](h)
             h = F.relu(h)
             hidden_rep.append(h)
-        
+
         out = hidden_rep[-1]
         out = self.drop1(out)
         score_over_layer = 0
@@ -245,22 +249,24 @@ class GIN(nn.Module):
 
         return out, score_over_layer
 
-    
+
 class GAT(nn.Module):
-    def __init__(self, 
-                 node_dim,
-                 edge_dim,
-                 num_layers,
-                 delta,
-                 mlp_ratio=4,
-                 drop=0.,
-                 drop_path=0.,
-                 conv_on_edge=True):
+    def __init__(
+        self,
+        node_dim,
+        edge_dim,
+        num_layers,
+        delta,
+        mlp_ratio=4,
+        drop=0.0,
+        drop_path=0.0,
+        conv_on_edge=True,
+    ):
         super().__init__()
         in_size = node_dim
         hid_size = node_dim
         out_size = node_dim
-        heads=[4, 4, 6]
+        heads = [4, 4, 6]
         self.gat_layers = nn.ModuleList()
         # three-layer GAT
         self.gat_layers.append(
@@ -284,7 +290,7 @@ class GAT(nn.Module):
                 activation=None,
             )
         )
-        
+
         # Linear function for graph poolings of output of each layer
         # which maps the output of different layers into a prediction score
         # linear functions for graph average poolings of output
@@ -303,31 +309,33 @@ class GAT(nn.Module):
         global_feat = self.linear(self.pool(g, local_feat))
         return local_feat, global_feat
 
-    
+
 class GATv2(nn.Module):
-    def __init__(self,
-                 node_dim,
-                 edge_dim,
-                 num_layers,
-                 delta,
-                 mlp_ratio=4,
-                 drop=0.,
-                 drop_path=0.,
-                 conv_on_edge=True):
+    def __init__(
+        self,
+        node_dim,
+        edge_dim,
+        num_layers,
+        delta,
+        mlp_ratio=4,
+        drop=0.0,
+        drop_path=0.0,
+        conv_on_edge=True,
+    ):
         super(GATv2, self).__init__()
         num_layers = 1
         in_dim = node_dim
         num_hidden = node_dim
         num_classes = node_dim
         num_heads = 8
-        num_out_heads= 1
+        num_out_heads = 1
         heads = ([num_heads] * num_layers) + [num_out_heads]
         activation = F.elu
         feat_drop = 0.25
         attn_drop = 0.25
         negative_slope = 0.2
         residual = True
-        
+
         self.num_layers = num_layers
         self.gatv2_layers = nn.ModuleList()
         self.activation = activation
@@ -378,7 +386,7 @@ class GATv2(nn.Module):
                 share_weights=True,
             )
         )
-        
+
         # Linear function for graph poolings of output of each layer
         # which maps the output of different layers into a prediction score
         # linear functions for graph average poolings of output
@@ -395,7 +403,7 @@ class GATv2(nn.Module):
         global_feat = self.linear(self.pool(g, local_feat))
         return local_feat, global_feat
 
-    
+
 class DeeperGCN(nn.Module):
     r"""
     Description
@@ -425,25 +433,27 @@ class DeeperGCN(nn.Module):
         Number of MLP layers in message normalization. Default is 1.
     """
 
-    def __init__(self,
-                 node_dim,
-                 edge_dim,
-                 num_layers,
-                 delta,
-                 mlp_ratio=4,
-                 drop=0.,
-                 drop_path=0.,
-                 conv_on_edge=True):
+    def __init__(
+        self,
+        node_dim,
+        edge_dim,
+        num_layers,
+        delta,
+        mlp_ratio=4,
+        drop=0.0,
+        drop_path=0.0,
+        conv_on_edge=True,
+    ):
         super(DeeperGCN, self).__init__()
-        node_feat_dim=node_dim
-        edge_feat_dim=edge_dim
-        hid_dim=node_dim
-        out_dim=node_dim
-        dropout=0.2
-        beta=1.0
-        learn_beta=False
-        aggr="softmax"
-        mlp_layers=1
+        node_feat_dim = node_dim
+        edge_feat_dim = edge_dim
+        hid_dim = node_dim
+        out_dim = node_dim
+        dropout = 0.2
+        beta = 1.0
+        learn_beta = False
+        aggr = "softmax"
+        mlp_layers = 1
         self.num_layers = num_layers
         self.dropout = dropout
         self.gcns = nn.ModuleList()
@@ -484,8 +494,10 @@ class DeeperGCN(nn.Module):
             global_feat = self.linear(self.pool(g, local_feat))
             return local_feat, global_feat
 
-        
+
 class AAGNetGraphEncoder(nn.Module):
+
+    # 20251029
     def __init__(
         self,
         node_dim,
@@ -493,9 +505,9 @@ class AAGNetGraphEncoder(nn.Module):
         num_layers,
         delta,
         mlp_ratio=4,
-        drop=0.,
-        drop_path=0.,
-        conv_on_edge=True
+        drop=0.0,
+        drop_path=0.0,
+        conv_on_edge=True,
     ):
         """
 
@@ -505,42 +517,65 @@ class AAGNetGraphEncoder(nn.Module):
             output_dim (int): [description]
             num_layers (int, optional): [description].
         """
-        super(AAGNetGraphEncoder, self).__init__()
+        super().__init__()
+
         self.num_layers = num_layers
         self.conv_on_edge = conv_on_edge
         self.node_convs = nn.ModuleList()
-        self.edge_convs = nn.ModuleList()        
+        self.edge_convs = nn.ModuleList()
         # since 2nd layer, the subsequent layers are share-weight
         for _ in range(2):
             if self.conv_on_edge:
                 self.edge_convs.append(
-                    EdgeMPNN(node_dim, edge_dim, mlp_ratio, drop, drop_path))
+                    EdgeMPNN(node_dim, edge_dim, mlp_ratio, drop, drop_path)
+                )
             self.node_convs.append(
-                NodeMPNN(node_dim, edge_dim, delta, mlp_ratio, drop, drop_path))
+                NodeMPNN(
+                    node_dim=node_dim,
+                    edge_dim=edge_dim,
+                    delta=delta,
+                    mlp_ratio=mlp_ratio,
+                    drop=drop,
+                    drop_path=drop_path,
+                )
+            )
 
         self.post_norm = nn.LayerNorm(node_dim)
         # linear functions for graph average poolings of output
         self.pool = dgl.nn.AvgPooling()
-        self.linear = MLP(1, node_dim, 0, node_dim, nn.LayerNorm, True)
-    
+        self.linear = MLP(
+            # 1,
+            # node_dim,
+            # 0,
+            # node_dim,
+            # nn.LayerNorm,
+            # True,
+            num_layers=1,
+            input_dim=node_dim,
+            hidden_dim=0,  # TODO 此处传参错误？
+            output_dim=node_dim,
+            norm=nn.LayerNorm,
+            last_norm=True,
+        )
+
     def forward(self, g, h, he):
         # first layer
         if self.conv_on_edge:
             he = self.edge_convs[0](g, h, he)
         h = self.node_convs[0](g, h, he)
-        
+
         # subsequent share-weight layer
-        for i in range(self.num_layers-1):
+        for i in range(self.num_layers - 1):
             if self.conv_on_edge:
                 he = self.edge_convs[1](g, h, he)
             h = self.node_convs[1](g, h, he)
-        
+
         local_feat = self.post_norm(h)
         # perform graph sum pooling over all nodes
         global_feat = self.linear(self.pool(g, local_feat))
         return local_feat, global_feat
 
-    
+
 class AAGNetGraphEncoderV2(nn.Module):
     def __init__(
         self,
@@ -549,9 +584,9 @@ class AAGNetGraphEncoderV2(nn.Module):
         num_layers,
         delta,
         mlp_ratio=4,
-        drop=0.,
-        drop_path=0.,
-        conv_on_edge=True
+        drop=0.0,
+        drop_path=0.0,
+        conv_on_edge=True,
     ):
         """
 
@@ -564,25 +599,26 @@ class AAGNetGraphEncoderV2(nn.Module):
         super(AAGNetGraphEncoderV2, self).__init__()
         self.num_layers = num_layers
         self.node_convs = nn.ModuleList()
-        self.edge_convs = nn.ModuleList()        
+        self.edge_convs = nn.ModuleList()
         # since 2nd layer, the subsequent layers are share-weight
         for _ in range(2):
             self.node_convs.append(
-                NodeMPNNV2(node_dim, edge_dim, delta, mlp_ratio, drop, drop_path))
+                NodeMPNNV2(node_dim, edge_dim, delta, mlp_ratio, drop, drop_path)
+            )
 
         self.post_norm = nn.LayerNorm(node_dim)
         # linear functions for graph average poolings of output
         self.pool = dgl.nn.AvgPooling()
         self.linear = MLP(1, node_dim, 0, node_dim, nn.LayerNorm, True)
-    
+
     def forward(self, g, h, he):
         # first layer
         h = self.node_convs[0](g, h, he)
-        
+
         # subsequent share-weight layer
-        for i in range(self.num_layers-1):
+        for i in range(self.num_layers - 1):
             h = self.node_convs[1](g, h, he)
-        
+
         local_feat = self.post_norm(h)
         # perform graph sum pooling over all nodes
         global_feat = self.linear(self.pool(g, local_feat))

@@ -5,38 +5,40 @@ import models.encoders as encoders
 from .layers import NonLinearClassifier, MLP
 
 
-
 ###############################################################################
 # Segmentation model
 ###############################################################################
+
 
 class AAGNetSegmentor(nn.Module):
     """
     AAG-Net solid face segmentation model
     """
 
-    def __init__(self,
-                 num_classes,
-                 arch,
-                 edge_attr_dim,
-                 node_attr_dim,
-                 edge_attr_emb,
-                 node_attr_emb,
-                 edge_grid_dim,
-                 node_grid_dim,
-                 edge_grid_emb,
-                 node_grid_emb,
-                 num_layers,
-                 delta,
-                 mlp_ratio=4,
-                 drop=0., 
-                 drop_path=0.,
-                 head_hidden_dim=256,
-                 conv_on_edge=True,
-                 use_uv_gird=True,
-                 use_edge_attr=True,
-                 use_face_attr=True,
-                ):
+    # 20251029
+    def __init__(
+        self,
+        num_classes,
+        arch,
+        edge_attr_dim,
+        node_attr_dim,
+        edge_attr_emb,
+        node_attr_emb,
+        edge_grid_dim,
+        node_grid_dim,
+        edge_grid_emb,
+        node_grid_emb,
+        num_layers,
+        delta,
+        mlp_ratio=4,
+        drop=0.0,
+        drop_path=0.0,
+        head_hidden_dim=256,
+        conv_on_edge=True,
+        use_uv_gird=True,
+        use_edge_attr=True,
+        use_face_attr=True,
+    ):
         """
         Initialize the AAG-Net solid face segmentation model
 
@@ -54,44 +56,74 @@ class AAGNetSegmentor(nn.Module):
         self.use_edge_attr = use_edge_attr
         self.use_face_attr = use_face_attr
         self.node_attr_encoder = nn.Sequential(
-                                    nn.Linear(node_attr_dim, node_attr_emb),
-                                    nn.LayerNorm(node_attr_emb))
+            nn.Linear(node_attr_dim, node_attr_emb),
+            nn.LayerNorm(node_attr_emb),
+        )
         self.node_grid_encoder = None
         if node_grid_dim:
-            self.node_grid_encoder = nn.Sequential(nn.Conv2d(node_grid_dim, node_grid_emb // 4, 3, 1, 1),
-                                                   nn.BatchNorm2d(node_grid_emb // 4),
-                                                   nn.Mish(),
-                                                   nn.Conv2d(node_grid_emb // 4, node_grid_emb // 2, 3, 1, 1),
-                                                   nn.BatchNorm2d(node_grid_emb // 2),
-                                                   nn.Mish(),
-                                                   nn.Conv2d(node_grid_emb // 2, node_grid_emb, 3, 1, 1),
-                                                   nn.BatchNorm2d(node_grid_emb),
-                                                   nn.Mish(),
-                                                   nn.AdaptiveAvgPool2d(1),
-                                                   nn.Flatten(1))
+            self.node_grid_encoder = nn.Sequential(
+                nn.Conv2d(
+                    node_grid_dim,
+                    node_grid_emb // 4,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                ),
+                nn.BatchNorm2d(node_grid_emb // 4),
+                nn.Mish(),
+                nn.Conv2d(
+                    node_grid_emb // 4,
+                    node_grid_emb // 2,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                ),
+                nn.BatchNorm2d(node_grid_emb // 2),
+                nn.Mish(),
+                nn.Conv2d(
+                    node_grid_emb // 2,
+                    node_grid_emb,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                ),
+                nn.BatchNorm2d(node_grid_emb),
+                nn.Mish(),
+                nn.AdaptiveAvgPool2d(1),
+                nn.Flatten(1),
+            )
         # A linear network to encode B-rep edge attributes
-        self.edge_attr_encoder = nn.Sequential(nn.Linear(edge_attr_dim, edge_attr_emb),
-                                               nn.LayerNorm(edge_attr_emb))
+        self.edge_attr_encoder = nn.Sequential(
+            nn.Linear(edge_attr_dim, edge_attr_emb),
+            nn.LayerNorm(edge_attr_emb),
+        )
         if edge_grid_dim:
-            # TODO
+            # TODO 这是原作者准备优化的地方？
             pass
         node_emb = node_attr_emb + node_grid_emb
         edge_emb = edge_attr_emb + edge_grid_emb
         # A graph neural network that message passes face and edge features
-        encoder = getattr(encoders, arch)
-        self.graph_encoder = encoder(node_emb, edge_emb, 
-                                     num_layers, 
-                                     delta, mlp_ratio, 
-                                     drop, drop_path,
-                                     conv_on_edge)
+        encoder = getattr(encoders, arch)  # todo 简化
+        self.graph_encoder = encoder(
+            node_dim=node_emb,
+            edge_dim=edge_emb,
+            num_layers=num_layers,
+            delta=delta,
+            mlp_ratio=mlp_ratio,
+            drop=drop,
+            drop_path=drop_path,
+            conv_on_edge=conv_on_edge,
+        )
         final_out_emb = 2 * node_emb
         # A non-linear classifier that maps face embeddings to face logits
-        self.seg_head = MLP(num_layers=2,
-                            input_dim=final_out_emb, 
-                            hidden_dim=head_hidden_dim,
-                            output_dim=num_classes,
-                            norm=nn.LayerNorm,
-                            act=nn.Mish)
+        self.seg_head = MLP(
+            num_layers=2,
+            input_dim=final_out_emb,
+            hidden_dim=head_hidden_dim,
+            output_dim=num_classes,
+            norm=nn.LayerNorm,
+            act=nn.Mish,
+        )
 
     def forward(self, batched_graph):
         """
@@ -102,16 +134,28 @@ class AAGNetSegmentor(nn.Module):
                                        (ndata['x']) and 1D edge UV-grids in the edge features (edata['x']).
 
         Returns:
-            torch.tensor: 
+            torch.tensor:
                 Logits (total_nodes_in_batch x num_classes)
                 Bottom Logits (total_nodes_in_batch x 1)
             list [torch.tensor]:
                 Face adjacency graph (num_graph_per_batch, num_faces x num_faces)
         """
         # Input features
-        input_node_attr = batched_graph.ndata["x"] if self.use_face_attr else torch.zeros_like(batched_graph.ndata["x"])
-        input_node_grid = batched_graph.ndata["grid"] if self.use_uv_gird else torch.zeros_like(batched_graph.ndata["grid"])
-        input_edge_attr = batched_graph.edata["x"] if self.use_edge_attr else torch.zeros_like(batched_graph.edata["x"])
+        input_node_attr = (
+            batched_graph.ndata["x"]
+            if self.use_face_attr
+            else torch.zeros_like(batched_graph.ndata["x"])
+        )
+        input_node_grid = (
+            batched_graph.ndata["grid"]
+            if self.use_uv_gird
+            else torch.zeros_like(batched_graph.ndata["grid"])
+        )
+        input_edge_attr = (
+            batched_graph.edata["x"]
+            if self.use_edge_attr
+            else torch.zeros_like(batched_graph.edata["x"])
+        )
         # input_edge_grid = batched_graph.edata["grid"]
         # Compute hidden face features
         node_feat = self.node_attr_encoder(input_node_attr)
@@ -122,12 +166,12 @@ class AAGNetSegmentor(nn.Module):
         # Compute hidden edge features
         edge_feat = self.edge_attr_encoder(input_edge_attr)
         # Message pass and compute per-face(node) and global embeddings
-        node_emb, graph_emb = self.graph_encoder(
-            batched_graph, node_feat, edge_feat
-        )
+        node_emb, graph_emb = self.graph_encoder(batched_graph, node_feat, edge_feat)
         # concatenated to the per-node embeddings
         num_nodes_per_graph = batched_graph.batch_num_nodes().to(graph_emb.device)
-        graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(graph_emb.device)
+        graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(
+            graph_emb.device
+        )
         local_global_feat = torch.cat((node_emb, graph_emb), dim=1)
         # Map to logits
         seg_out = self.seg_head(local_global_feat)

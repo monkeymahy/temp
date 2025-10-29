@@ -6,14 +6,14 @@ import numpy as np
 import torch
 
 
-
+# 20251028
 def seed_torch(seed=42):
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -24,14 +24,18 @@ def init_logger(path):
     handler = logging.FileHandler(path)
     handler.setLevel(logging.INFO)
     formatter = logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] : %(message)s ", "%Y-%m-%d %H:%M:%S")
+        "[%(asctime)s] [%(levelname)s] : %(message)s ", "%Y-%m-%d %H:%M:%S"
+    )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    
+
     return logger
 
 
+# 20251029
 def print_num_params(model):
+    assert isinstance(model, torch.nn.Module)
+
     Total_params = 0
     Trainable_params = 0
     NonTrainable_params = 0
@@ -43,9 +47,9 @@ def print_num_params(model):
             Trainable_params += mulValue
         else:
             NonTrainable_params += mulValue
-    
-    print(f'Total params: {Total_params / 1e6}M')
-    print(f'Trainable params: {Trainable_params / 1e6}M')
-    print(f'Non-trainable params: {NonTrainable_params / 1e6}M')
-    
+
+    print(f"Total params: {Total_params / 1e6}M")
+    print(f"Trainable params: {Trainable_params / 1e6}M")
+    print(f"Non-trainable params: {NonTrainable_params / 1e6}M")
+
     return Total_params
