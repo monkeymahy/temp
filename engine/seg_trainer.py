@@ -53,6 +53,7 @@ if __name__ == "__main__":
             "use_edge_attr": True,
             "use_face_attr": True,
             "seed": 42,
+            "num_workers": 1,
             "device": "cuda",
             "architecture": "AAGNetGraphEncoder",  # recommend: AAGNetGraphEncoder option: GCN SAGE GIN GAT GATv2 DeeperGCN AAGNetGraphEncoder
             "dataset": dataset_name,
@@ -124,13 +125,16 @@ if __name__ == "__main__":
         num_threads=8,
     )
     train_loader = train_dataset.get_dataloader(
-        batch_size=swanlab.config["batch_size"], pin_memory=True
+        batch_size=swanlab.config["batch_size"],
+        pin_memory=True,
+        num_workers=swanlab.config["num_workers"],
     )
     val_loader = val_dataset.get_dataloader(
         batch_size=swanlab.config["batch_size"],
         shuffle=False,
         drop_last=False,
         pin_memory=True,
+        num_workers=swanlab.config["num_workers"],
     )
 
     seg_loss = nn.CrossEntropyLoss()
@@ -140,7 +144,9 @@ if __name__ == "__main__":
         weight_decay=swanlab.config["weight_decay"],
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max=swanlab.config["epochs"], eta_min=0
+        opt,
+        T_max=swanlab.config["epochs"],
+        eta_min=0,
     )
 
     train_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)
@@ -203,8 +209,8 @@ if __name__ == "__main__":
 
         logger.info(
             f"train_loss : {mean_train_loss}, \
-                      train_seg_acc: {mean_train_seg_acc}, \
-                      train_seg_iou: {mean_train_seg_iou}"
+            train_seg_acc: {mean_train_seg_acc}, \
+            train_seg_iou: {mean_train_seg_iou}"
         )
         swanlab.log(
             {

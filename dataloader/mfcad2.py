@@ -11,22 +11,25 @@ from .base import BaseDataset
 from utils.data_utils import load_one_graph
 
 
-
 class MFCAD2Dataset(BaseDataset):
+
     @staticmethod
     def num_classes():
         return 25
-    
-    def __init__(self, 
-                 root_dir, 
-                 graphs=None, 
-                 split="train", 
-                 normalize=True, 
-                 center_and_scale=True, 
-                 random_rotate=False, 
-                 num_train_data=-1, 
-                 transform=None, 
-                 num_threads=0):
+
+    # 20251029
+    def __init__(
+        self,
+        root_dir,
+        graphs=None,
+        split="train",
+        normalize=True,
+        center_and_scale=True,
+        random_rotate=False,
+        num_train_data=-1,
+        transform=None,
+        num_threads=0,  # todo 无用参数
+    ):
         """
         Load the MFInstSeg Dataset from the root directory.
 
@@ -40,14 +43,23 @@ class MFCAD2Dataset(BaseDataset):
             num_train_data (int, optional): Number of training examples to use. Defaults to -1 (all training examples will be used).
             transform (callable, optional): Transformation to apply to the data.
         """
+        assert isinstance(root_dir, str)
+        assert isinstance(graphs, (type(None), list))
+        assert split in ("train", "val", "test")
+        assert isinstance(normalize, bool)
+        assert isinstance(center_and_scale, bool)
+        assert isinstance(random_rotate, bool)
+        assert isinstance(num_train_data, int) and num_train_data >= -1
+        assert callable(transform) or transform is None
+
         path = pathlib.Path(root_dir)
         self.path = path
         self.transform = transform
         self.random_rotate = random_rotate
-        assert split in ("train", "val", "test")
 
         filelist = {}
-        data = np.loadtxt(str(path.joinpath(f"{split}.txt")), dtype=str)
+        _file = str(path.joinpath(f"{split}.txt"))
+        data = np.loadtxt(_file, dtype=str)
         filelist[split] = data
 
         if split == "train":
@@ -57,13 +69,18 @@ class MFCAD2Dataset(BaseDataset):
         else:
             split_filelist = filelist["test"]
 
-        self.random_rotate = random_rotate
-
         # Load graphs
         print(f"Loading {split} data...")
         split_filelist = set(split_filelist)
         graph_path = path.joinpath("aag")
-        self.load_graphs(graph_path, graphs, split_filelist, center_and_scale, normalize)
+        self.load_graphs(  # 41607个graph
+            file_path=graph_path,
+            graphs=graphs,
+            split_file_list=split_filelist,
+            center_and_scale_grid=center_and_scale,
+            normalization_attribute=normalize,
+            num_threads=4,
+        )
         print("Done loading {} files".format(len(self.data)))
 
     def _collate(self, batch):
@@ -78,9 +95,9 @@ class MFCAD2Dataset(BaseDataset):
         """
         batched_graph = dgl.batch([sample["graph"] for sample in batch])
         batched_filenames = [sample["filename"] for sample in batch]
-        return {"graph": batched_graph,
-                "filename": batched_filenames}
-    
+        return {"graph": batched_graph, "filename": batched_filenames}
+
+    # 20251029
     def load_one_graph(self, fn, data):
         """
         Load the data for a single file.
@@ -93,7 +110,7 @@ class MFCAD2Dataset(BaseDataset):
             dict: Data for the file.
         """
         # Load the graph using base class method
-        sample = load_one_graph(fn, data)
+        sample = load_one_graph(fn=fn, data=data)
         # Additionally load the label and store it as node data
         label_file = self.path.joinpath("labels").joinpath(fn + ".json")
         with open(str(label_file), "r") as read_file:
@@ -103,8 +120,8 @@ class MFCAD2Dataset(BaseDataset):
         return sample
 
 
-
-if __name__ == '__main__':
-    dataset = MFInstSegDataset(root_dir='E:\\MFCAD2', split='train', center_and_scale=True, normalize=False)
+if __name__ == "__main__":
+    dataset = MFInstSegDataset(
+        root_dir="E:\\MFCAD2", split="train", center_and_scale=True, normalize=False
+    )
     print(dataset[0]["graph"].ndata["y"])
-    
