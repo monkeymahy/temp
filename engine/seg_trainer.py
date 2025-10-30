@@ -158,18 +158,24 @@ if __name__ == "__main__":
     iters = len(train_loader)
     ema_decay = swanlab.config["ema_decay_per_epoch"] ** (1 / iters)
     print(f"EMA decay: {ema_decay}")
-    ema = ExponentialMovingAverage(model.parameters(), decay=ema_decay)
+    # 减少训练噪声、提高验证/测试时的稳定性和最终指标（在检测、分割等视觉任务里常见）。
+    ema = ExponentialMovingAverage(
+        parameters=model.parameters(),
+        decay=ema_decay,
+    )
 
     best_acc = 0.0
     save_path = "output"
-    if not os.path.exists(save_path):
+    if not os.path.exists(save_path):  # 啰嗦实现
         os.mkdir(save_path)
     save_path = os.path.join(save_path, time_str)
     if not os.path.exists(save_path):
         os.mkdir(save_path)
-    logger = init_logger(os.path.join(save_path, "log.txt"))
+    logger = init_logger(path=os.path.join(save_path, "log.txt"))
+
     for epoch in range(swanlab.config["epochs"]):
         logger.info(f"------------- Now start epoch {epoch}------------- ")
+
         model.train()
         # train_per_inst_acc = []
         train_losses = []
@@ -202,7 +208,7 @@ if __name__ == "__main__":
             train_seg_iou.update(seg_pred, seg_label)
 
         scheduler.step()
-        # batch end
+        # epoch end
         mean_train_loss = np.mean(train_losses).item()
         mean_train_seg_acc = train_seg_acc.compute().item()
         mean_train_seg_iou = train_seg_iou.compute().item()
@@ -224,12 +230,12 @@ if __name__ == "__main__":
 
         # eval
         with torch.no_grad():
-            with ema.average_parameters():
+            with ema.average_parameters():  # 使用 EMA 参数进行评估
                 model.eval()
                 # val_per_inst_acc = []
                 val_losses = []
                 for data in tqdm(val_loader):
-                    graphs = data["graph"].to(device)
+                    graphs = data["graph"].to(device, non_blocking=True)
                     seg_label = graphs.ndata["y"]
 
                     seg_pred = model(graphs)
@@ -246,8 +252,8 @@ if __name__ == "__main__":
 
                 logger.info(
                     f"val_loss : {mean_val_loss}, \
-                              val_seg_acc: {mean_val_seg_acc}, \
-                              val_seg_iou: {mean_val_seg_iou}"
+                    val_seg_acc: {mean_val_seg_acc}, \
+                    val_seg_iou: {mean_val_seg_iou}"
                 )
                 swanlab.log(
                     {
@@ -283,7 +289,8 @@ if __name__ == "__main__":
         num_threads=8,
     )
     test_loader = test_dataset.get_dataloader(
-        batch_size=swanlab.config["batch_size"], pin_memory=True
+        batch_size=swanlab.config["batch_size"],
+        pin_memory=True,
     )
 
     test_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)
@@ -314,8 +321,8 @@ if __name__ == "__main__":
 
         logger.info(
             f"test_loss : {mean_test_loss}, \
-                      test_seg_acc: {mean_test_seg_acc}, \
-                      test_seg_iou: {mean_test_seg_iou}"
+            test_seg_acc: {mean_test_seg_acc}, \
+            test_seg_iou: {mean_test_seg_iou}"
         )
         swanlab.log(
             {

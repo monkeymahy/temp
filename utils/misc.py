@@ -18,7 +18,10 @@ def seed_torch(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
+# 20251030
 def init_logger(path):
+    assert isinstance(path, str)
+
     logger = logging.getLogger()
     logger.setLevel(level=logging.INFO)
     handler = logging.FileHandler(path)

@@ -117,11 +117,15 @@ class MFCAD2Dataset(BaseDataset):
             labels_data = json.load(read_file)
         labels_data = np.array(labels_data, dtype=np.int32)
         sample["graph"].ndata["y"] = torch.tensor(labels_data).long()
+
         return sample
 
 
 if __name__ == "__main__":
-    dataset = MFInstSegDataset(
-        root_dir="E:\\MFCAD2", split="train", center_and_scale=True, normalize=False
+    dataset = MFCAD2Dataset(
+        root_dir="E:\\MFCAD2",
+        split="train",
+        center_and_scale=True,
+        normalize=False,
     )
     print(dataset[0]["graph"].ndata["y"])
