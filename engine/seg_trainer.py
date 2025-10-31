@@ -109,16 +109,18 @@ if __name__ == "__main__":
 
     train_dataset = Dataset(
         root_dir=dataset,
+        graphs=None,
         split="train",
         center_and_scale=False,
         normalize=True,
         random_rotate=False,
         num_threads=8,
     )
-    graphs = train_dataset.graphs()  # no need to load graphs again !
+    # graphs = train_dataset.graphs()  # no need to load graphs again ! # todo ugly implementation
     val_dataset = Dataset(
         root_dir=dataset,
-        graphs=graphs,
+        graphs=None,
+        # graphs=graphs,# todo ugly implementation
         split="val",
         center_and_scale=False,
         normalize=True,
