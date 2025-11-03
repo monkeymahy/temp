@@ -4,6 +4,7 @@ import json
 import torch
 import dgl
 import numpy as np
+from typing import List, Sequence, Union
 
 from .base import BaseDataset
 from utils.data_utils import load_one_graph, load_statistics, load_json_or_pkl
@@ -17,7 +18,7 @@ class MFCAD2Dataset(BaseDataset):
     def num_classes():
         return 25
 
-    # 20251029
+    # 20251103
     def __init__(
         self,
         root_dir,
@@ -63,55 +64,41 @@ class MFCAD2Dataset(BaseDataset):
         path = pathlib.Path(root_dir)
         self.path = path
 
-        # todo 硬编码
+        # todo 硬编码，后续转移到超参数中
         SPLIT_DIR = Path("C:\Data\MFCAD2_split")
-        self.filenames = list(SPLIT_DIR.rglob("*.json"))
-        print("Done scanning {} files".format(len(self.filenames)))
+        self.filenames = list(SPLIT_DIR.rglob("*.json"))  # 59455文件
+        print(">>> Done scanning {} files".format(len(self.filenames)))
 
         if self.normalize:
             self.stat = load_statistics(stat_path=path.joinpath("aag/attr_stat.json"))
 
-        filelist = {}
+        files_id = {}
         _file = str(path.joinpath(f"{split}.txt"))
         data = np.loadtxt(_file, dtype=str)
-        filelist[split] = data
+        files_id[split] = data
 
+        # TODO 遗漏了对self.filenames进行下采样
         if split == "train":
-            split_filelist = filelist["train"][:num_train_data]
+            files_id[split] = files_id[split][:num_train_data]
         elif split == "val":
-            split_filelist = filelist["val"]
+            files_id[split] = files_id[split]
         else:
-            split_filelist = filelist["test"]
+            files_id[split] = files_id[split]
 
         # Load graphs
-        print(f"Loading {split} data...")
-        split_filelist = set(split_filelist)
+        print(f">>> Loading {split} data...")
+        files_id[split] = set(files_id[split])
 
-    # 20251029
-    def load_graphs(  # todo 无用函数
-        self,
-        file_path,
-        graphs=None,
-        split_file_list=None,
-        center_and_scale_grid=True,
-        normalization_attribute=True,
-        num_threads=4,
-    ):
-        assert isinstance(file_path, Path)
-        assert isinstance(graphs, (type(None), list))
-        assert isinstance(split_file_list, set)
-        assert isinstance(center_and_scale_grid, bool)
-        assert isinstance(normalization_attribute, bool)
-        assert isinstance(num_threads, int) and num_threads > 0
-
-        self.filenames = []
-
-        if graphs:
-            self.dataset = graphs
-        else:  # todo 替换
-            self.dataset = load_json_or_pkl(json_path=file_path.joinpath("graphs.json"))
-        if normalization_attribute:
-            stat = load_statistics(stat_path=file_path.joinpath("attr_stat.json"))
+        # 根据 split 的 id 列表筛选出对应的文件名子序列（并断言全部存在）
+        # 假设拆分时文件名模式为 graphs_XXXXXXXX.json（默认 8 位补零）
+        self.filenames = self.filter_filenames_by_ids(
+            filenames=self.filenames,
+            ids=files_id[split],
+            index_width=8,
+            prefix="graphs_",
+            suffix=".json",
+        )
+        print(f">>> Filtered {len(self.filenames)} files for split '{split}'.")
 
     def _collate(self, batch):
         """
@@ -126,6 +113,57 @@ class MFCAD2Dataset(BaseDataset):
         batched_graph = dgl.batch([sample["graph"] for sample in batch])
         batched_filenames = [sample["filename"] for sample in batch]
         return {"graph": batched_graph, "filename": batched_filenames}
+
+    # 20251103
+    @staticmethod
+    def filter_filenames_by_ids(
+        filenames: List[Path],
+        ids: set,
+        index_width: int = 8,
+        prefix: str = "graphs_",
+        suffix: str = ".json",
+    ) -> List[Path]:
+        """
+        根据给定的 id 列表，从文件名列表中过滤出对应的文件按 id 顺序返回；
+        同时断言所有 id 都能在文件名中找到对应文件。
+
+        约定：目标文件名形如 f"{prefix}{id.zfill(index_width)}{suffix}"。
+        """
+        assert isinstance(filenames, list)
+        assert isinstance(ids, set)
+        assert isinstance(index_width, int) and index_width > 0
+        assert isinstance(prefix, str) and prefix is not None
+        assert isinstance(suffix, str) and suffix is not None
+
+        # 建立 name -> Path 的快速索引
+        name_to_path = {p.name: p for p in filenames}
+
+        def to_padded_id(x: Union[str, int]) -> str:
+            # 允许传入数字或数字字符串
+            assert isinstance(x, np.str_)
+
+            s = str(x).strip()
+            assert s.isdigit()
+
+            return s.zfill(index_width)
+
+        selected: List[Path] = []
+        missing: List[str] = []
+        for _id in ids:
+            pid = to_padded_id(_id)
+            fname = f"{prefix}{pid}{suffix}"
+            path = name_to_path.get(fname)
+            if path is None:
+                missing.append(str(_id))
+            else:
+                selected.append(path)
+
+        print(
+            f">>> There are {len(missing)} ids not found in filenames, examples: {missing[:10]}"
+        )
+        # 训练集 len(selected)=41382 len(missing)=384
+        # 验证集 len(selected)=8877 len(missing)=73
+        return selected
 
     # 20251029
     def load_one_graph(self, fn, data):
