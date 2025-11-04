@@ -75,7 +75,7 @@ if __name__ == "__main__":
     elif dataset_name == "MFCAD2":
         Dataset = MFCAD2Dataset
     else:
-        assert False, "Not supported dataset"
+        raise ValueError("Not supported dataset")
     n_classes = Dataset.num_classes()
 
     model = AAGNetSegmentor(
@@ -109,22 +109,22 @@ if __name__ == "__main__":
 
     train_dataset = Dataset(
         root_dir=dataset,
-        graphs=None,
+        graphs=None,  # todo 此参数可删除
         split="train",
         center_and_scale=False,
         normalize=True,
         random_rotate=False,
-        num_threads=8,
+        num_threads=8,  # todo 无用参数
     )
     # graphs = train_dataset.graphs()  # no need to load graphs again ! # todo ugly implementation
     val_dataset = Dataset(
         root_dir=dataset,
-        graphs=None,
+        graphs=None,  # todo 此参数可删除
         # graphs=graphs,# todo ugly implementation
         split="val",
         center_and_scale=False,
         normalize=True,
-        num_threads=8,
+        num_threads=8,  # todo 无用参数
     )
     train_loader = train_dataset.get_dataloader(
         batch_size=swanlab.config["batch_size"],

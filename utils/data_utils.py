@@ -3,12 +3,11 @@ import random
 import os.path as osp
 import json
 import pathlib
-
+from typing import List, Union
 import numpy as np
 import torch
 import dgl
 from scipy.spatial.transform import Rotation
-
 from OCC.Core.STEPControl import STEPControl_Reader
 
 
@@ -123,37 +122,37 @@ def load_json_or_pkl(json_path):  # todo 此函数非常占用内存，峰值80G
             return json.load(fp)
 
 
-# 20251029
+# 20251104
 def load_one_graph(fn, data):
     # Create the graph using the edges and number of nodes
-    edges = tuple(data["graph"]["edges"])
-    num_nodes = data["graph"]["num_nodes"]
-    dgl_graph = dgl.graph(edges, num_nodes=num_nodes)
+    edges = tuple(data["graph"]["edges"])  # 图的边
+    num_nodes = data["graph"]["num_nodes"]  # 图的节点数
+    dgl_graph = dgl.graph(data=edges, num_nodes=num_nodes)
 
     # Convert node attributes to PyTorch tensors and add them to the graph
-    node_attributes = data["graph_face_attr"]
-    node_attributes = np.array(node_attributes)
+    node_attributes = data["graph_face_attr"]  # TODO 这里到底存什么？
+    node_attributes = np.array(node_attributes)  # (n_nodes, feat_dim)
     node_attributes = torch.from_numpy(node_attributes).type(torch.float32)
     dgl_graph.ndata["x"] = node_attributes
 
     # Convert and add node grid attributes if they are present
-    node_grid_attributes = data["graph_face_grid"]
+    node_grid_attributes = data["graph_face_grid"]  # TODO 这里到底存什么？
     if len(node_grid_attributes) > 0:
         node_grid_attributes = np.array(node_grid_attributes)
         node_grid_attributes = torch.from_numpy(node_grid_attributes).type(
             torch.float32
-        )
+        )  # shape = (n_nodes, grid_dim, grid_u, grid_v) (33,7,5,5)
         dgl_graph.ndata["grid"] = node_grid_attributes
 
     # Convert edge attributes to PyTorch tensors and add them to the graph
-    edge_attributes = data["graph_edge_attr"]
+    edge_attributes = data["graph_edge_attr"]  # TODO 这里到底存什么？
     edge_attributes = np.array(edge_attributes)
     edge_attributes = torch.from_numpy(edge_attributes).type(torch.float32)
     dgl_graph.edata["x"] = edge_attributes
 
     # Convert and add edge grid attributes if they are present
-    edge_grid_attributes = data["graph_edge_grid"]
-    if len(edge_grid_attributes) > 0:
+    edge_grid_attributes = data["graph_edge_grid"]  # TODO 这里到底存什么？
+    if len(edge_grid_attributes) > 0:  # todo 存在不存在的情况
         edge_grid_attributes = np.array(edge_grid_attributes)
         edge_grid_attributes = torch.from_numpy(edge_grid_attributes).type(
             torch.float32
@@ -161,6 +160,7 @@ def load_one_graph(fn, data):
         dgl_graph.edata["grid"] = edge_grid_attributes
 
     sample = {"graph": dgl_graph, "filename": fn}
+
     return sample
 
 
@@ -186,3 +186,54 @@ def load_statistics(stat_path):  # TODO 统计值哪里来的？
     stat["std_edge_attr"][stat["std_edge_attr"] < eps] = 1.0
 
     return stat
+
+
+# 20251103 陈守玉
+def filter_filenames_by_ids(
+    filenames: List[Path],
+    ids: set,
+    index_width: int = 8,
+    prefix: str = "graphs_",
+    suffix: str = ".json",
+) -> List[Path]:
+    """
+    根据给定的 id 列表，从文件名列表中过滤出对应的文件按 id 顺序返回；
+    同时断言所有 id 都能在文件名中找到对应文件。
+
+    约定：目标文件名形如 f"{prefix}{id.zfill(index_width)}{suffix}"。
+    """
+    assert isinstance(filenames, list)
+    assert isinstance(ids, set)
+    assert isinstance(index_width, int) and index_width > 0
+    assert isinstance(prefix, str) and prefix is not None
+    assert isinstance(suffix, str) and suffix is not None
+
+    # 建立 name -> Path 的快速索引
+    name_to_path = {p.name: p for p in filenames}
+
+    def to_padded_id(x: Union[str, int]) -> str:
+        # 允许传入数字或数字字符串
+        assert isinstance(x, np.str_)
+
+        s = str(x).strip()
+        assert s.isdigit()
+
+        return s.zfill(index_width)
+
+    selected: List[Path] = []
+    missing: List[str] = []
+    for _id in ids:
+        pid = to_padded_id(_id)
+        fname = f"{prefix}{pid}{suffix}"
+        path = name_to_path.get(fname)
+        if path is None:
+            missing.append(str(_id))
+        else:
+            selected.append(path)
+
+    print(
+        f">>> There are {len(missing)} ids not found in filenames, examples: {missing[:10]}"
+    )
+    # 训练集 len(selected)=41382 len(missing)=384
+    # 验证集 len(selected)=8877 len(missing)=73
+    return selected

@@ -7,9 +7,10 @@ import numpy as np
 from typing import List, Sequence, Union
 
 from .base import BaseDataset
-from utils.data_utils import load_one_graph, load_statistics, load_json_or_pkl
+from utils.data_utils import load_one_graph, load_statistics
 from utils.data_utils import standardization, center_and_scale
 from utils.data_utils import get_random_rotation, rotate_uvgrid
+from utils.data_utils import filter_filenames_by_ids
 
 
 class MFCAD2Dataset(BaseDataset):
@@ -18,7 +19,7 @@ class MFCAD2Dataset(BaseDataset):
     def num_classes():
         return 25
 
-    # 20251103
+    # 20251104
     def __init__(
         self,
         root_dir,
@@ -61,8 +62,8 @@ class MFCAD2Dataset(BaseDataset):
         self.random_rotate = random_rotate
         self.num_train_data = num_train_data
         self.transform = transform
-        path = pathlib.Path(root_dir)
-        self.path = path
+        root_dir = pathlib.Path(root_dir)
+        self.root_dir = root_dir
 
         # todo 硬编码，后续转移到超参数中
         SPLIT_DIR = Path("C:\Data\MFCAD2_split")
@@ -70,14 +71,15 @@ class MFCAD2Dataset(BaseDataset):
         print(">>> Done scanning {} files".format(len(self.filenames)))
 
         if self.normalize:
-            self.stat = load_statistics(stat_path=path.joinpath("aag/attr_stat.json"))
+            self.stat = load_statistics(
+                stat_path=root_dir.joinpath("aag/attr_stat.json")
+            )
 
         files_id = {}
-        _file = str(path.joinpath(f"{split}.txt"))
+        _file = str(root_dir.joinpath(f"{split}.txt"))
         data = np.loadtxt(_file, dtype=str)
         files_id[split] = data
 
-        # TODO 遗漏了对self.filenames进行下采样
         if split == "train":
             files_id[split] = files_id[split][:num_train_data]
         elif split == "val":
@@ -91,7 +93,7 @@ class MFCAD2Dataset(BaseDataset):
 
         # 根据 split 的 id 列表筛选出对应的文件名子序列（并断言全部存在）
         # 假设拆分时文件名模式为 graphs_XXXXXXXX.json（默认 8 位补零）
-        self.filenames = self.filter_filenames_by_ids(
+        self.filenames = filter_filenames_by_ids(
             filenames=self.filenames,
             ids=files_id[split],
             index_width=8,
@@ -114,58 +116,7 @@ class MFCAD2Dataset(BaseDataset):
         batched_filenames = [sample["filename"] for sample in batch]
         return {"graph": batched_graph, "filename": batched_filenames}
 
-    # 20251103
-    @staticmethod
-    def filter_filenames_by_ids(
-        filenames: List[Path],
-        ids: set,
-        index_width: int = 8,
-        prefix: str = "graphs_",
-        suffix: str = ".json",
-    ) -> List[Path]:
-        """
-        根据给定的 id 列表，从文件名列表中过滤出对应的文件按 id 顺序返回；
-        同时断言所有 id 都能在文件名中找到对应文件。
-
-        约定：目标文件名形如 f"{prefix}{id.zfill(index_width)}{suffix}"。
-        """
-        assert isinstance(filenames, list)
-        assert isinstance(ids, set)
-        assert isinstance(index_width, int) and index_width > 0
-        assert isinstance(prefix, str) and prefix is not None
-        assert isinstance(suffix, str) and suffix is not None
-
-        # 建立 name -> Path 的快速索引
-        name_to_path = {p.name: p for p in filenames}
-
-        def to_padded_id(x: Union[str, int]) -> str:
-            # 允许传入数字或数字字符串
-            assert isinstance(x, np.str_)
-
-            s = str(x).strip()
-            assert s.isdigit()
-
-            return s.zfill(index_width)
-
-        selected: List[Path] = []
-        missing: List[str] = []
-        for _id in ids:
-            pid = to_padded_id(_id)
-            fname = f"{prefix}{pid}{suffix}"
-            path = name_to_path.get(fname)
-            if path is None:
-                missing.append(str(_id))
-            else:
-                selected.append(path)
-
-        print(
-            f">>> There are {len(missing)} ids not found in filenames, examples: {missing[:10]}"
-        )
-        # 训练集 len(selected)=41382 len(missing)=384
-        # 验证集 len(selected)=8877 len(missing)=73
-        return selected
-
-    # 20251029
+    # 20251104
     def load_one_graph(self, fn, data):
         """
         Load the data for a single file.
@@ -180,7 +131,7 @@ class MFCAD2Dataset(BaseDataset):
         # Load the graph using base class method
         sample = load_one_graph(fn=fn, data=data)
         # Additionally load the label and store it as node data
-        label_file = self.path.joinpath("labels").joinpath(fn + ".json")
+        label_file = self.root_dir.joinpath("labels").joinpath(fn + ".json")
         with open(str(label_file), "r") as read_file:
             labels_data = json.load(read_file)
         labels_data = np.array(labels_data, dtype=np.int32)
@@ -191,6 +142,7 @@ class MFCAD2Dataset(BaseDataset):
     def __len__(self):
         return len(self.filenames)
 
+    # 20251104
     def __getitem__(self, idx):
         # 检索json文件名
         filename = self.filenames[idx]
@@ -199,7 +151,7 @@ class MFCAD2Dataset(BaseDataset):
             item = json.load(read_file)
             fn, data = item
 
-        one_graph = self.load_one_graph(fn, data)
+        one_graph = self.load_one_graph(fn=fn, data=data)
 
         if one_graph["graph"].edata["x"].size(0) == 0:
             # Catch the case of graphs with no edges
@@ -211,7 +163,6 @@ class MFCAD2Dataset(BaseDataset):
         if self.center_and_scale:
             one_graph = center_and_scale(data=one_graph)
 
-        # one_graph = self.filenames[idx]# todo 添加处理好的graph
         if self.random_rotate:
             rotation = get_random_rotation()
             one_graph["graph"].ndata["grid"] = rotate_uvgrid(
