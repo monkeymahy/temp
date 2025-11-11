@@ -237,3 +237,54 @@ def filter_filenames_by_ids(
     # 训练集 len(selected)=41382 len(missing)=384
     # 验证集 len(selected)=8877 len(missing)=73
     return selected
+
+
+# 20251103 陈守玉
+def filter_filenames_by_ids_9s(
+    filenames: List[Path],
+    ids: set,
+    index_width: int = 8,
+    prefix: str = "graphs_",
+    suffix: str = ".json",
+) -> List[Path]:
+    """（兼容九韶提供的数据）
+    根据给定的 id 列表，从文件名列表中过滤出对应的文件按 id 顺序返回；
+    同时断言所有 id 都能在文件名中找到对应文件。
+
+    约定：目标文件名形如 f"{prefix}{id.zfill(index_width)}{suffix}"。
+    """
+    assert isinstance(filenames, list)
+    assert isinstance(ids, set)
+    assert isinstance(index_width, int) and index_width > 0
+    assert isinstance(prefix, str) and prefix is not None
+    assert isinstance(suffix, str) and suffix is not None
+
+    # 建立 name -> Path 的快速索引
+    name_to_path = {p.name: p for p in filenames}
+
+    def to_padded_id(x: Union[str, int]) -> str:
+        # 允许传入数字或数字字符串
+        assert isinstance(x, np.str_)
+
+        s = str(x).strip()
+        assert s.isdigit()
+
+        return s.zfill(index_width)
+
+    selected: List[Path] = []
+    missing: List[str] = []
+    for _id in ids:
+        # pid = to_padded_id(_id)
+        fname = f"{_id}{suffix}"
+        path = name_to_path.get(fname)
+        if path is None:
+            missing.append(str(_id))
+        else:
+            selected.append(path)
+
+    print(
+        f">>> There are {len(missing)} ids not found in filenames, examples: {missing[:10]}"
+    )
+    # 训练集 len(selected)=41382 len(missing)=384
+    # 验证集 len(selected)=8877 len(missing)=73
+    return selected

@@ -154,6 +154,7 @@ class BaseDataset(Dataset):
         num_workers=0,
         drop_last=True,
         pin_memory=False,
+        persistent_workers=True,
     ):
         return DataLoader(
             self,
@@ -164,5 +165,5 @@ class BaseDataset(Dataset):
             num_workers=num_workers,  # Can be set to non-zero on Linux
             drop_last=drop_last,
             pin_memory=pin_memory,
-            persistent_workers=True,
+            persistent_workers=persistent_workers,
         )

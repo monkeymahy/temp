@@ -7,7 +7,6 @@ from torch import nn
 import numpy as np
 from torch_ema import ExponentialMovingAverage
 from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
-import wandb
 import sys
 import swanlab
 
@@ -23,9 +22,6 @@ from utils.misc import seed_torch, init_logger, print_num_params
 
 
 if __name__ == "__main__":
-    # os.environ["WANDB_API_KEY"] = "##################"
-    # os.environ["WANDB_MODE"] = "offline"
-
     # start a new wandb run to track this script
     dataset_name = "MFCAD2"  # option: MFCAD2 MFCAD
     time_str = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
@@ -57,11 +53,12 @@ if __name__ == "__main__":
             "device": "cuda",
             "architecture": "AAGNetGraphEncoder",  # recommend: AAGNetGraphEncoder option: GCN SAGE GIN GAT GATv2 DeeperGCN AAGNetGraphEncoder
             "dataset": dataset_name,
-            "dataset": r"D:\Projects\AAGNet\training_data\MFCAD2",
+            # "dataset": r"D:\Projects\AAGNet\training_data\MFCAD2",
+            "dataset": r"C:\Data\SF-JSON",
             "epochs": 100,  # option: 100e for MFCAD2; 350e for MFCAD
             "lr": 1e-2,
             "weight_decay": 1e-2,
-            "batch_size": 256,
+            "batch_size": 32,
             "ema_decay_per_epoch": 1.0 / 2.0,
         },
     )
@@ -112,7 +109,7 @@ if __name__ == "__main__":
         graphs=None,  # todo 此参数可删除
         split="train",
         center_and_scale=False,
-        normalize=True,
+        normalize=False,
         random_rotate=False,
         num_threads=8,  # todo 无用参数
     )
@@ -123,7 +120,7 @@ if __name__ == "__main__":
         # graphs=graphs,# todo ugly implementation
         split="val",
         center_and_scale=False,
-        normalize=True,
+        normalize=False,
         num_threads=8,  # todo 无用参数
     )
     train_loader = train_dataset.get_dataloader(
@@ -280,19 +277,21 @@ if __name__ == "__main__":
         # epoch end
 
     # training end test
-    graphs = train_dataset.graphs()  # no need to load graphs again !
+    # graphs = train_dataset.graphs()  # no need to load graphs again !
     test_dataset = Dataset(
         root_dir=dataset,
-        graphs=graphs,
+        graphs=None,  # todo 此参数可删除
+        # graphs=graphs,# todo ugly implementation
         split="test",
         center_and_scale=False,
-        normalize=True,
+        normalize=False,
         random_rotate=False,
         num_threads=8,
     )
     test_loader = test_dataset.get_dataloader(
         batch_size=swanlab.config["batch_size"],
         pin_memory=True,
+        persistent_workers=False,
     )
 
     test_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)

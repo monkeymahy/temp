@@ -4,20 +4,20 @@ import json
 import torch
 import dgl
 import numpy as np
-from typing import List, Sequence, Union
 
 from .base import BaseDataset
 from utils.data_utils import load_one_graph, load_statistics
 from utils.data_utils import standardization, center_and_scale
 from utils.data_utils import get_random_rotation, rotate_uvgrid
-from utils.data_utils import filter_filenames_by_ids
+from utils.data_utils import filter_filenames_by_ids, filter_filenames_by_ids_9s
 
 
 class MFCAD2Dataset(BaseDataset):
 
     @staticmethod
     def num_classes():
-        return 25
+        # return 25
+        return 6  # SF数据
 
     # 20251104
     def __init__(
@@ -66,8 +66,9 @@ class MFCAD2Dataset(BaseDataset):
         self.root_dir = root_dir
 
         # todo 硬编码，后续转移到超参数中
-        SPLIT_DIR = Path("C:\Data\MFCAD2_split")
-        self.filenames = list(SPLIT_DIR.rglob("*.json"))  # 59455文件
+        # SPLIT_DIR = Path("C:\Data\MFCAD2_split")
+        # self.filenames = list(SPLIT_DIR.rglob("*.json"))  # 59455文件
+        self.filenames = list((root_dir / "aag").rglob("*.json"))  # 59455文件
         print(">>> Done scanning {} files".format(len(self.filenames)))
 
         if self.normalize:
@@ -93,7 +94,14 @@ class MFCAD2Dataset(BaseDataset):
 
         # 根据 split 的 id 列表筛选出对应的文件名子序列（并断言全部存在）
         # 假设拆分时文件名模式为 graphs_XXXXXXXX.json（默认 8 位补零）
-        self.filenames = filter_filenames_by_ids(
+        # self.filenames = filter_filenames_by_ids(
+        #     filenames=self.filenames,
+        #     ids=files_id[split],
+        #     index_width=8,
+        #     prefix="graphs_",
+        #     suffix=".json",
+        # )
+        self.filenames = filter_filenames_by_ids_9s(
             filenames=self.filenames,
             ids=files_id[split],
             index_width=8,
@@ -158,12 +166,12 @@ class MFCAD2Dataset(BaseDataset):
             raise ValueError("Graph has no edges")
 
         # use data augmentation
-        if self.normalize:
+        if self.normalize:  # 激活
             one_graph = standardization(data=one_graph, stat=self.stat)
-        if self.center_and_scale:
+        if self.center_and_scale:  # 未激活
             one_graph = center_and_scale(data=one_graph)
 
-        if self.random_rotate:
+        if self.random_rotate:  # 未激活
             rotation = get_random_rotation()
             one_graph["graph"].ndata["grid"] = rotate_uvgrid(
                 one_graph["graph"].ndata["grid"], rotation
@@ -172,7 +180,7 @@ class MFCAD2Dataset(BaseDataset):
                 one_graph["graph"].edata["grid"] = rotate_uvgrid(
                     one_graph["graph"].edata["grid"], rotation
                 )
-        if self.transform:
+        if self.transform:  # None
             one_graph["graph"] = self.transform(one_graph["graph"])
 
         return one_graph
