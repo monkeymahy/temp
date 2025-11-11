@@ -19,7 +19,7 @@ from dataloader.mfcad import MFCADDataset
 from dataloader.mfcad2 import MFCAD2Dataset
 from models.segmentors import AAGNetSegmentor
 from utils.misc import seed_torch, init_logger, print_num_params
-
+from constant import LABEL_NAMES
 
 if __name__ == "__main__":
     # start a new wandb run to track this script
@@ -149,9 +149,15 @@ if __name__ == "__main__":
     )
 
     train_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)
+    train_seg_acc_per_class = MulticlassAccuracy(
+        num_classes=n_classes, average=None
+    ).to(device)
     train_seg_iou = MulticlassJaccardIndex(num_classes=n_classes).to(device)
 
     val_seg_acc = MulticlassAccuracy(num_classes=n_classes).to(device)
+    val_seg_acc_per_class = MulticlassAccuracy(num_classes=n_classes, average=None).to(
+        device
+    )
     val_seg_iou = MulticlassJaccardIndex(num_classes=n_classes).to(device)
 
     iters = len(train_loader)
@@ -204,6 +210,7 @@ if __name__ == "__main__":
             ema.update()
 
             train_seg_acc.update(seg_pred, seg_label)
+            train_seg_acc_per_class.update(seg_pred, seg_label)
             train_seg_iou.update(seg_pred, seg_label)
 
         scheduler.step()
@@ -211,21 +218,32 @@ if __name__ == "__main__":
         mean_train_loss = np.mean(train_losses).item()
         mean_train_seg_acc = train_seg_acc.compute().item()
         mean_train_seg_iou = train_seg_iou.compute().item()
+        per_class_train_acc = train_seg_acc_per_class.compute()  # shape [C]
+
+        # 逐类写 wandb / swanlab（键名：train_acc_cls_0 ...）
+        log_dict = {
+            "epoch": epoch,
+            "train_acc_global": mean_train_seg_acc,
+        }
 
         logger.info(
             f"train_loss : {mean_train_loss}, \
             train_seg_acc: {mean_train_seg_acc}, \
             train_seg_iou: {mean_train_seg_iou}"
         )
-        swanlab.log(
-            {
-                "epoch": epoch,
-                "train_loss": mean_train_loss,
-                "train_seg_acc": mean_train_seg_acc,
-                "train_seg_iou": mean_train_seg_iou,
-            }
-        )
+        log_dict = {
+            "epoch": epoch,
+            "train_loss": mean_train_loss,
+            "train_seg_acc": mean_train_seg_acc,
+            "train_seg_iou": mean_train_seg_iou,
+        }
+        for i, v in enumerate(per_class_train_acc):
+            if torch.isnan(v):
+                v = torch.tensor(0.0)
+            log_dict[f"train_acc_cls({i})_{LABEL_NAMES[i]}"] = v.item()
+        swanlab.log(log_dict)
         train_seg_acc.reset()
+        train_seg_acc_per_class.reset()
 
         # eval
         with torch.no_grad():
