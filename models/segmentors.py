@@ -59,7 +59,7 @@ class AAGNetSegmentor(nn.Module):
             nn.Linear(node_attr_dim, node_attr_emb),
             nn.LayerNorm(node_attr_emb),
         )
-        self.node_grid_encoder = None
+
         if node_grid_dim:
             self.node_grid_encoder = nn.Sequential(
                 nn.Conv2d(
@@ -92,6 +92,9 @@ class AAGNetSegmentor(nn.Module):
                 nn.AdaptiveAvgPool2d(1),
                 nn.Flatten(1),
             )
+        else:
+            self.node_grid_encoder = None
+
         # A linear network to encode B-rep edge attributes
         self.edge_attr_encoder = nn.Sequential(
             nn.Linear(edge_attr_dim, edge_attr_emb),
