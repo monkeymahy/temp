@@ -2,3 +2,4 @@ output/
 **/**.pyc
 training_data/
 wandb/
+lightning_logs/

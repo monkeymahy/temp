@@ -2,20 +2,18 @@ import dgl
 import torch
 import lightning.pytorch as L
 from torch.utils.data import DataLoader
-import os
 
-from v2.dataset import SFdataset
+from v2.dataset.SFdataset import SFDataset
 
 
-class SeasFireDataModule(L.LightningDataModule):
+class SFDataModule(L.LightningDataModule):
     """
-    用于SeasFire数据集的LightningDataModule，负责数据的加载、划分与批处理。
+    用于私有数据集的LightningDataModule，负责数据的加载、划分与批处理。
     """
 
     def __init__(
         self,
         root_dir=r"C:\Data\SF-JSON",
-        split="train",
         normalize=False,
         center_and_scale=False,
         random_rotate=False,
@@ -34,7 +32,6 @@ class SeasFireDataModule(L.LightningDataModule):
             raw_zarr_path (str): 原始Zarr数据路径。
             history_steps (int): 输入序列的历史步数。
             future_steps (int): 预测序列的未来步数。
-            split_strategy (str): 数据划分方式，"time"或"space"。
             num_folds (int): K折交叉验证的折数。
             test_fold_index (int): 测试集所在折的索引。
             batch_size (int): 批量大小。
@@ -46,7 +43,6 @@ class SeasFireDataModule(L.LightningDataModule):
         """
         # 参数校验，确保健壮性
         assert isinstance(root_dir, str)
-        assert isinstance(split, str) and split in ("train", "val", "test")
         assert isinstance(normalize, bool)
         assert isinstance(center_and_scale, bool)
         assert isinstance(random_rotate, bool)
@@ -56,10 +52,10 @@ class SeasFireDataModule(L.LightningDataModule):
 
         # 成员变量赋值
         self.root_dir = root_dir
-        self.split = split
         self.normalize = normalize
         self.center_and_scale = center_and_scale
         self.random_rotate = random_rotate
+        self.transform = transform
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.drop_last = drop_last
@@ -81,7 +77,7 @@ class SeasFireDataModule(L.LightningDataModule):
         # 仅在训练阶段或未指定阶段时加载训练/验证集
         if stage == "fit" or stage is None:
             # 训练集
-            self.ds_train = SFdataset(
+            self.ds_train = SFDataset(
                 root_dir=self.root_dir,
                 split="train",
                 normalize=self.normalize,
@@ -90,7 +86,7 @@ class SeasFireDataModule(L.LightningDataModule):
                 transform=self.transform,
             )
             # 验证集
-            self.ds_valid = SFdataset(
+            self.ds_valid = SFDataset(
                 root_dir=self.root_dir,
                 split="val",
                 normalize=self.normalize,
@@ -99,7 +95,7 @@ class SeasFireDataModule(L.LightningDataModule):
                 transform=self.transform,
             )
         elif stage == "test":
-            self.ds_test = SFdataset(
+            self.ds_test = SFDataset(
                 root_dir=self.root_dir,
                 split="test",
                 normalize=self.normalize,
