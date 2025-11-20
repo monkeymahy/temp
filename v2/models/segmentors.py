@@ -1,9 +1,11 @@
 import torch
 from torch import nn
 import lightning.pytorch as L
+from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
 
 import models.encoders as encoders
 from .layers import MLP
+from v2.constant import LABEL_NAMES
 
 
 ###############################################################################
@@ -41,6 +43,7 @@ class AAGNetSegmentor(L.LightningModule):
         use_face_attr=True,
         lr=1e-4,
         weight_decay=0,
+        n_epochs=200,
     ):
         """
         Initialize the AAG-Net solid face segmentation model
@@ -60,6 +63,7 @@ class AAGNetSegmentor(L.LightningModule):
         self.use_face_attr = use_face_attr
         self.lr = lr
         self.weight_decay = weight_decay
+        self.n_epochs = n_epochs
         self.seg_loss = nn.CrossEntropyLoss()
 
         self.node_attr_encoder = nn.Sequential(
@@ -135,6 +139,66 @@ class AAGNetSegmentor(L.LightningModule):
             act=nn.Mish,
         )
 
+        self._init_metrics(num_classes=num_classes)
+
+    def _init_metrics(self, num_classes):
+        """
+        初始化各类指标
+        """
+        # 训练集指标
+        self.tra_seg_acc = MulticlassAccuracy(
+            num_classes=num_classes,
+            average="macro",
+        )
+        self.tra_seg_iou = MulticlassJaccardIndex(
+            num_classes=num_classes,
+            average="macro",
+        )
+        self.tra_seg_acc_per_class = MulticlassAccuracy(
+            num_classes=num_classes,
+            average=None,
+        )
+        self.tra_seg_iou_per_class = MulticlassJaccardIndex(
+            num_classes=num_classes,
+            average=None,
+        )
+
+        # 验证集指标
+        self.val_seg_acc = MulticlassAccuracy(
+            num_classes=num_classes,
+            average="macro",
+        )
+        self.val_seg_iou = MulticlassJaccardIndex(
+            num_classes=num_classes,
+            average="macro",
+        )
+        self.val_seg_acc_per_class = MulticlassAccuracy(
+            num_classes=num_classes,
+            average=None,
+        )
+        self.val_seg_iou_per_class = MulticlassJaccardIndex(
+            num_classes=num_classes,
+            average=None,
+        )
+
+        # 测试集论文
+        self.tst_seg_acc = MulticlassAccuracy(
+            num_classes=num_classes,
+            average="macro",
+        )
+        self.tst_seg_iou = MulticlassJaccardIndex(
+            num_classes=num_classes,
+            average="macro",
+        )
+        self.tst_seg_acc_per_class = MulticlassAccuracy(
+            num_classes=num_classes,
+            average=None,
+        )
+        self.tst_seg_iou_per_class = MulticlassJaccardIndex(
+            num_classes=num_classes,
+            average=None,
+        )
+
     def forward(self, batched_graph):
         """
         Forward pass
@@ -199,13 +263,27 @@ class AAGNetSegmentor(L.LightningModule):
         seg_pred = self.forward(batched_graph=graphs)
         loss = self.seg_loss(seg_pred, seg_label)
 
-        _dic = {"loss": loss.item()}
+        self.tra_seg_acc(seg_pred, seg_label)
+        self.tra_seg_iou(seg_pred, seg_label)
+        seg_acc_per_class = self.tra_seg_acc_per_class(seg_pred, seg_label)
+        seg_iou_per_class = self.tra_seg_iou_per_class(seg_pred, seg_label)
+
+        _dic = {
+            "tra_loss": loss.item(),
+            "tra_seg_acc_avg": self.tra_seg_acc,
+            "tra_seg_iou_avg": self.tra_seg_iou,
+        }
+        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+            _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
+            _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         self.log_dict(
             _dic,
-            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
             batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
         )
+
         return loss
 
     def validation_step(
@@ -219,22 +297,39 @@ class AAGNetSegmentor(L.LightningModule):
         seg_pred = self.forward(batched_graph=graphs)
         loss = self.seg_loss(seg_pred, seg_label)
 
-        _dic = {"loss": loss.item()}
+        self.val_seg_acc(seg_pred, seg_label)
+        self.val_seg_iou(seg_pred, seg_label)
+        seg_acc_per_class = self.val_seg_acc_per_class(seg_pred, seg_label)
+        seg_iou_per_class = self.val_seg_iou_per_class(seg_pred, seg_label)
 
+        _dic = {
+            "val_loss": loss.item(),
+            "val_seg_acc_avg": self.val_seg_acc,
+            "val_seg_iou_avg": self.val_seg_iou,
+        }
+        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+            _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
+            _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
         self.log_dict(
             _dic,
-            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
             batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
         )
-        return loss
 
     def configure_optimizers(self):
         # include trainable NaN fill parameters in predictor optimizer
 
-        opt = torch.optim.AdamW(
+        optimizer = torch.optim.AdamW(
             params=self.parameters(),
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
 
-        return opt
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=self.n_epochs,
+            eta_min=0,
+        )
+
+        return [optimizer], [scheduler]

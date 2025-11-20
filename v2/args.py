@@ -1,38 +1,5 @@
 import argparse
 
-"""
-"edge_attr_dim": 12,
-"node_attr_dim": 10,
-"edge_attr_emb": 64,  # recommend: 64
-"node_attr_emb": 64,  # recommend: 64
-"edge_grid_dim": 0,
-"node_grid_dim": 7,
-"edge_grid_emb": 0,
-"node_grid_emb": 64,  # recommend: 64
-"num_layers": 3,  # recommend: 3
-"delta": 2,  # obsolete
-"mlp_ratio": 2,
-"drop": 0.25,
-"drop_path": 0.25,
-"head_hidden_dim": 64,
-"conv_on_edge": False,
-"use_uv_gird": True,
-"use_edge_attr": True,
-"use_face_attr": True,
-"seed": 42,
-"num_workers": 1,
-"device": "cuda",
-"model_name": "AAGNet",
-"dataset": dataset_name,
-# "dataset": r"D:\Projects\AAGNet\training_data\MFCAD2",
-"dataset": r"C:\Data\SF-JSON",
-"epochs": 200,  # option: 100e for MFCAD2; 350e for MFCAD
-"lr": 1e-2,
-"weight_decay": 1e-2,
-"batch_size": 32,
-"ema_decay_per_epoch": 1.0 / 2.0,
-"""
-
 
 def get_args():
     parser = argparse.ArgumentParser(description="AAGNet arguments")
@@ -72,7 +39,7 @@ def get_args():
         help="Whether to use face attributes (True/False)",
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_workers", type=int, default=1)
+    parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--model_name", type=str, default="AAGNet")
     parser.add_argument("--data_root", type=str, default=r"C:\Data\SF-JSON")
@@ -82,5 +49,19 @@ def get_args():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--ema_decay_per_epoch", type=float, default=1.0 / 2.0)
     parser.add_argument("--num_classes", type=int, default=6)
+
+    # 日志相关参数
+    parser.add_argument("--output_dir", type=str, default=r"D:\Projects\AAGNet\output")
+
+    # 检查点相关参数
+    parser.add_argument("--ckpt_folder", type=str, default="checkpoints")
+
+    # swanlab相关参数
+    parser.add_argument("--proj_name", type=str, default="AAGNet_PL")
+    parser.add_argument("--swanlog_dir", type=str, default="swanlog")
+
+    # 监控指标相关参数
+    parser.add_argument("--monitor", type=str, default="val_seg_acc_avg")
+    parser.add_argument("--monitor_mode", type=str, default="max")
 
     return parser.parse_args()

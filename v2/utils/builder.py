@@ -1,9 +1,13 @@
 from argparse import Namespace
 from datetime import datetime
 import lightning.pytorch as pl
+from swanlab.integration.pytorch_lightning import SwanLabLogger
+import os.path as osp
+from lightning.pytorch.callbacks import ModelCheckpoint
 
 from v2.dataset.SFdatamodule import SFDataModule
 from v2.models.segmentors import AAGNetSegmentor
+from v2.utils.io import ensure_directories_exist
 
 
 def build_model(args):
@@ -34,6 +38,9 @@ def build_model(args):
             use_uv_gird=args.use_uv_gird,
             use_edge_attr=args.use_edge_attr,
             use_face_attr=args.use_face_attr,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            n_epochs=args.epochs,
         )
 
     return model
@@ -84,15 +91,19 @@ def build_trainer(
     # 当前时间字符串，用于唯一标识实验
     run_name = datetime.now().strftime("%m-%d-%H-%M-%S")
 
-    # # 检查点回调：保存验证集上性能最优的模型
-    # checkpoint_callback = ModelCheckpoint(
-    #     monitor=config.monitor,  # 监控的指标名称
-    #     mode=config.monitor_mode,  # 指标越大越好
-    #     save_top_k=1,  # 只保留最优的一个模型
-    #     dirpath=osp.join(config.output_dir, "checkpoints", run_name),  # 检查点保存目录
-    #     filename="{epoch}-{" + config.monitor + ":.2f}",  # 文件名格式
-    #     save_last=True,  # 同时保存最后一个epoch的模型
-    # )
+    CKPT_DIR = osp.join(args.output_dir, args.ckpt_folder, run_name)
+    SWANLOG_DIR = osp.join(args.output_dir, args.swanlog_dir, run_name)
+    ensure_directories_exist([SWANLOG_DIR])
+
+    # 检查点回调：保存验证集上性能最优的模型
+    checkpoint_callback = ModelCheckpoint(
+        monitor=args.monitor,  # 监控的指标名称
+        mode=args.monitor_mode,  # 指标越大越好
+        save_top_k=1,  # 只保留最优的一个模型
+        dirpath=CKPT_DIR,  # 检查点保存目录
+        filename="{epoch}-{" + args.monitor + ":.2f}",  # 文件名格式
+        save_last=True,  # 同时保存最后一个epoch的模型
+    )
 
     # # 早停回调：若指标多次未提升则提前终止训练
     # early_stopping_callback = EarlyStopping(
@@ -105,33 +116,32 @@ def build_trainer(
     # # 数据打乱回调：在每个训练epoch开始前打乱训练数据
     # data_shuffle_callback = TrainDataShuffleCallback()
 
-    # # 日志记录器：用于记录训练过程
-    # swanlab_logger = None
-    # if config.activate_swanlab:
-    #     swanlab_logger = SwanLabLogger(
-    #         project=config.proj_name,
-    #         experiment_name=run_name,
-    #         logdir=osp.join(config.log_dir, "swanlog"),
-    #     )
-
-    # # 合并所有回调
-    # callbacks = (
-    #     custom_callbacks
-    #     if custom_callbacks is not None
-    #     else [
-    #         checkpoint_callback,
-    #         early_stopping_callback,
-    #         data_shuffle_callback,
-    #     ]
-    # )
+    # 日志记录器：用于记录训练过程
+    swanlab_logger = SwanLabLogger(
+        project=args.proj_name,
+        experiment_name=run_name,
+        logdir=SWANLOG_DIR,
+    )
+    # metrics_callback = MetricsCallback()
+    # # # 合并所有回调
+    # # callbacks = (
+    # #     custom_callbacks
+    # #     if custom_callbacks is not None
+    # #     else [
+    # #         checkpoint_callback,
+    # #         early_stopping_callback,
+    # #         data_shuffle_callback,
+    # #     ]
+    # # )
+    # callbacks = [metrics_callback]
 
     # 构建 Trainer
     trainer = pl.Trainer(
         max_epochs=args.epochs,  # 最大训练轮数
-        # callbacks=callbacks,  # 回调列表
+        callbacks=[checkpoint_callback],  # 回调列表
         accelerator="gpu",  # 使用GPU训练
         # devices=args.devices,  # 指定GPU设备
-        # logger=swanlab_logger,  # 日志记录器
+        logger=swanlab_logger,  # 日志记录器
         enable_checkpointing=True,  # 启用检查点
         enable_progress_bar=show_progress_bar,  # 启用进度条
         log_every_n_steps=50,  # 每50步记录一次日志
