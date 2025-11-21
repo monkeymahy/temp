@@ -204,8 +204,7 @@ class AAGNetSegmentor(L.LightningModule):
         Forward pass
 
         Args:
-            batched_graph (dgl.Graph): A batched DGL graph containing the face 2D UV-grids in node features
-                                       (ndata['x']) and 1D edge UV-grids in the edge features (edata['x']).
+            batched_graph (dgl.Graph): A batched DGL graph containing the face 2D UV-grids in node features (ndata['x']) and 1D edge UV-grids in the edge features (edata['x']).
 
         Returns:
             torch.tensor:
@@ -310,6 +309,39 @@ class AAGNetSegmentor(L.LightningModule):
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
+
+        self.log_dict(
+            _dic,
+            on_step=False,
+            on_epoch=True,
+            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
+        )
+
+    def test_step(
+        self,
+        batch: dict,
+        batch_idx: int,
+    ):
+        graphs = batch["graph"]
+        seg_label = graphs.ndata["y"]
+
+        seg_pred = self.forward(batched_graph=graphs)
+        loss = self.seg_loss(seg_pred, seg_label)
+
+        self.tst_seg_acc(seg_pred, seg_label)
+        self.tst_seg_iou(seg_pred, seg_label)
+        seg_acc_per_class = self.tst_seg_acc_per_class(seg_pred, seg_label)
+        seg_iou_per_class = self.tst_seg_iou_per_class(seg_pred, seg_label)
+
+        _dic = {
+            "tst_loss": loss.item(),
+            "tst_seg_acc_avg": self.tst_seg_acc,
+            "tst_seg_iou_avg": self.tst_seg_iou,
+        }
+        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+            _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
+            _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
+
         self.log_dict(
             _dic,
             on_step=False,

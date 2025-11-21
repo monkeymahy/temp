@@ -22,7 +22,7 @@ def train(args):
 
     model = build_model(args=args)
     datamodule = build_datamodule(args=args)
-    trainer = build_trainer(args=args, show_progress_bar=True)
+    trainer = build_trainer(args=args)
 
     # 开始训练
     trainer.fit(model, datamodule=datamodule)
@@ -34,16 +34,23 @@ def train(args):
     print(f">>> 最佳验证分数: {best_score}")
     print(f">>> 最佳模型路径: {best_path}")
 
-    pass
+    return best_path
 
 
-def test(args):
-    pass
+def test(args, best_path):
+    assert isinstance(args, Namespace)
+
+    model = build_model(args=args)
+    datamodule = build_datamodule(args=args)
+    trainer = build_trainer(args=args)
+
+    res = trainer.test(model=model, datamodule=datamodule, ckpt_path=best_path)
 
 
 if __name__ == "__main__":
     args = get_args()
     pl.seed_everything(args.seed, workers=True)  # 设置随机种子，保证可复现
 
-    train(args)
+    best_path = train(args)
+    test(args, best_path)
     pass

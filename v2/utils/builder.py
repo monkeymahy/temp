@@ -3,7 +3,10 @@ from datetime import datetime
 import lightning.pytorch as pl
 from swanlab.integration.pytorch_lightning import SwanLabLogger
 import os.path as osp
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
+
+# from lightning.pytorch.callbacks import StochasticWeightAveraging, WeightAveraging
+# from lightning.pytorch.callbacks import WeightAveraging
 
 from v2.dataset.SFdatamodule import SFDataModule
 from v2.models.segmentors import AAGNetSegmentor
@@ -68,25 +71,19 @@ def build_datamodule(args):
     return dm
 
 
-def build_trainer(
-    args: Namespace,
-    # custom_callbacks=None,
-    show_progress_bar=True,
-):
+def build_trainer(args: Namespace):
     """
     构建并返回 PyTorch Lightning 的 Trainer 实例。
 
     参数:
         config (Namespace): 包含训练相关参数的命名空间对象。
         custom_callbacks (list): 可选，用户自定义回调列表。
-        show_progress_bar (bool): 是否显示进度条。
 
     返回:
         pl.Trainer: 配置好的训练器对象。
     """
     assert isinstance(args, Namespace)
     # assert isinstance(custom_callbacks, list) or custom_callbacks is None
-    assert isinstance(show_progress_bar, bool)
 
     # 当前时间字符串，用于唯一标识实验
     run_name = datetime.now().strftime("%m-%d-%H-%M-%S")
@@ -104,6 +101,7 @@ def build_trainer(
         filename="{epoch}-{" + args.monitor + ":.2f}",  # 文件名格式
         save_last=True,  # 同时保存最后一个epoch的模型
     )
+    swa_callback = StochasticWeightAveraging(swa_epoch_start=10, swa_lrs=0.01)
 
     # # 早停回调：若指标多次未提升则提前终止训练
     # early_stopping_callback = EarlyStopping(
@@ -113,37 +111,21 @@ def build_trainer(
     #     verbose=config.verbose,  # 输出早停信息
     # )
 
-    # # 数据打乱回调：在每个训练epoch开始前打乱训练数据
-    # data_shuffle_callback = TrainDataShuffleCallback()
-
     # 日志记录器：用于记录训练过程
     swanlab_logger = SwanLabLogger(
         project=args.proj_name,
         experiment_name=run_name,
         logdir=SWANLOG_DIR,
     )
-    # metrics_callback = MetricsCallback()
-    # # # 合并所有回调
-    # # callbacks = (
-    # #     custom_callbacks
-    # #     if custom_callbacks is not None
-    # #     else [
-    # #         checkpoint_callback,
-    # #         early_stopping_callback,
-    # #         data_shuffle_callback,
-    # #     ]
-    # # )
-    # callbacks = [metrics_callback]
 
     # 构建 Trainer
     trainer = pl.Trainer(
         max_epochs=args.epochs,  # 最大训练轮数
-        callbacks=[checkpoint_callback],  # 回调列表
+        callbacks=[checkpoint_callback, swa_callback],  # 回调列表
         accelerator="gpu",  # 使用GPU训练
         # devices=args.devices,  # 指定GPU设备
         logger=swanlab_logger,  # 日志记录器
         enable_checkpointing=True,  # 启用检查点
-        enable_progress_bar=show_progress_bar,  # 启用进度条
         log_every_n_steps=50,  # 每50步记录一次日志
         deterministic=True,  # 保证可复现性
         # check_val_every_n_epoch=args.check_val_every_n_epoch,  # 验证集检查频率
@@ -151,10 +133,8 @@ def build_trainer(
         # limit_train_batches=5,  # 限制训练批次数量（用于debug）
         # limit_val_batches=5,  # 限制验证批次数量（用于debug）
         # limit_test_batches=100,  # 限制测试批次数量（用于debug）
-        # precision="16-mixed",                       # 可选：混合精度训练，节省显存
         # gradient_clip_val=1.0,                      # 可选：梯度裁剪
         # accumulate_grad_batches=1,                  # 可选：梯度累积
-        # inference_mode=False,  # 为了兼容SHAP计算
     )
 
     return trainer
