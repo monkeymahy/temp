@@ -388,4 +388,5 @@ if __name__ == "__main__":
             if torch.isnan(v):
                 v = torch.tensor(0.0)
             log_dict_test[f"test_iou_cls({i})_{LABEL_NAMES[i]}"] = v.item()
+
         swanlab.log(log_dict_test)

@@ -49,8 +49,8 @@ def test(args, best_path):
 
 if __name__ == "__main__":
     args = get_args()
+
     pl.seed_everything(args.seed, workers=True)  # 设置随机种子，保证可复现
 
     best_path = train(args)
     test(args, best_path)
-    pass

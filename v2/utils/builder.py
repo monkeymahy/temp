@@ -5,12 +5,11 @@ from swanlab.integration.pytorch_lightning import SwanLabLogger
 import os.path as osp
 from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
 
-# from lightning.pytorch.callbacks import StochasticWeightAveraging, WeightAveraging
-# from lightning.pytorch.callbacks import WeightAveraging
 
 from v2.dataset.SFdatamodule import SFDataModule
 from v2.models.segmentors import AAGNetSegmentor
 from v2.utils.io import ensure_directories_exist
+from v2.callbacks.EMA import EMACallback
 
 
 def build_model(args):
@@ -102,6 +101,9 @@ def build_trainer(args: Namespace):
         save_last=True,  # 同时保存最后一个epoch的模型
     )
     swa_callback = StochasticWeightAveraging(swa_epoch_start=10, swa_lrs=0.01)
+    ema_callback = EMACallback(decay=0.5 ** (1 / 14))  # todo 硬编码
+
+    callbacks = [checkpoint_callback, swa_callback, ema_callback]
 
     # # 早停回调：若指标多次未提升则提前终止训练
     # early_stopping_callback = EarlyStopping(
@@ -121,9 +123,8 @@ def build_trainer(args: Namespace):
     # 构建 Trainer
     trainer = pl.Trainer(
         max_epochs=args.epochs,  # 最大训练轮数
-        callbacks=[checkpoint_callback, swa_callback],  # 回调列表
+        callbacks=callbacks,  # 回调列表
         accelerator="gpu",  # 使用GPU训练
-        # devices=args.devices,  # 指定GPU设备
         logger=swanlab_logger,  # 日志记录器
         enable_checkpointing=True,  # 启用检查点
         log_every_n_steps=50,  # 每50步记录一次日志
