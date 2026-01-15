@@ -2,6 +2,8 @@ output/
 **/**.pyc
 training_data/
 MFCAD2/
+datasetmfacd/
+atasetmfinstseg/
 # 本地调试配置(VSCode文件)
 launch.json
 
