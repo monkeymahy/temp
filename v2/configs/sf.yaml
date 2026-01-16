@@ -36,7 +36,7 @@ trainer:
         save_last: true
 
 model:
-  num_classes: 6
+  num_classes: 3
   arch: AAGNetGraphEncoder
   edge_attr_dim: 12
   node_attr_dim: 10
