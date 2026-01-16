@@ -19,7 +19,6 @@ class SFDataModule(L.LightningDataModule):
         random_rotate=False,
         transform=None,
         batch_size=32,
-        shuffle=False,
         drop_last=False,
         num_workers=4,
         prefetch_factor=4,
@@ -57,7 +56,6 @@ class SFDataModule(L.LightningDataModule):
         self.random_rotate = random_rotate
         self.transform = transform
         self.batch_size = batch_size
-        self.shuffle = shuffle
         self.drop_last = drop_last
         self.num_workers = num_workers
         self.persistent_workers = self.num_workers > 0
