@@ -23,10 +23,6 @@ class MFCAD2Dataset(Dataset):
     """
     原始的MFCAD2数据集类，用于加载和处理MFCAD2数据集
     """
-    
-    @staticmethod
-    def num_classes():
-        return 25  # MFCAD2数据
 
     def __init__(
         self,
@@ -38,6 +34,8 @@ class MFCAD2Dataset(Dataset):
         random_rotate=False,
         num_train_data=-1,
         transform=None,
+        use_3category=False,
+        use_9category=False,
     ):
         """
         初始化MFCAD2数据集
@@ -71,6 +69,8 @@ class MFCAD2Dataset(Dataset):
         self.transform = transform
         root_dir = pathlib.Path(root_dir)
         self.root_dir = root_dir
+        self.use_3category = use_3category
+        self.use_9category = use_9category
 
         # 1. 扫描所有图结构数据文件，已经分割后的
         #  - self.filenames: 存储所有找到的JSON文件的完整路径列表，如 [Path("E:/AAGnetV2/MFCAD2/aag/1.json"), ...]
@@ -124,6 +124,14 @@ class MFCAD2Dataset(Dataset):
         )
         print(f">>> Filtered {len(self.filenames)} files for split '{split}'.")
 
+    def num_classes(self):
+        if self.use_3category is True:
+            return 3
+        elif self.use_9category is True:
+            return 9  # 九类别映射：0-other, 1-Through hole, 2-Blind hole, 3-Triangular through slot, 4-Rectangular through slot, 5-Circular through slot, 6-Rectangular blind slot, 7-Vertical circular end blind slot, 8-Horizontal circular end blind slot
+        else:
+            return 25  # MFCAD2原始25类数据
+
     def _collate(self, batch):
         """
         将一批数据样本合并为一个批次
@@ -156,6 +164,51 @@ class MFCAD2Dataset(Dataset):
         with open(str(label_file), "r") as read_file:
             labels_data = json.load(read_file)
         labels_data = np.array(labels_data, dtype=np.int32)
+
+          # 类别映射逻辑
+        if self.use_3category is True:
+            # 定义类别映射
+            mapped_labels = np.zeros_like(labels_data)
+            
+            # 映射到1-hole的类别
+            hole_classes = [1, 12]  # 1 - Through hole, 12 - Blind hole
+            # 映射到2-slot的类别
+            slot_classes = [5, 6, 7, 17, 18, 19]  # 5-7: through slots, 17-19: blind slots
+            
+            # 执行映射
+            for i, label in enumerate(labels_data):
+                if label in hole_classes:
+                    mapped_labels[i] = 1  # hole
+                elif label in slot_classes:
+                    mapped_labels[i] = 2  # slot
+                else:
+                    mapped_labels[i] = 0  # other
+            
+            labels_data = mapped_labels #array([1, 2, 1, 2, 0], dtype=int32)
+        elif self.use_9category is True:
+            # 定义9类别映射
+            mapped_labels = np.zeros_like(labels_data)
+            
+            # 定义类别映射字典
+            category_map = {
+                1: 1,    # Through hole
+                12: 2,   # Blind hole
+                5: 3,    # Triangular through slot
+                6: 4,    # Rectangular through slot
+                7: 5,    # Circular through slot
+                17: 6,   # Rectangular blind slot
+                18: 7,   # Vertical circular end blind slot
+                19: 8    # Horizontal circular end blind slot
+            }
+            
+            # 执行映射
+            for i, label in enumerate(labels_data):
+                if label in category_map:
+                    mapped_labels[i] = category_map[label]
+                else:
+                    mapped_labels[i] = 0  # other
+            
+            labels_data = mapped_labels
         sample["graph"].ndata["y"] = torch.tensor(labels_data).long()
 
         return sample
@@ -225,6 +278,8 @@ class MFCAD2DataModule(L.LightningDataModule):
         drop_last=False,
         num_workers=4,
         prefetch_factor=4,
+        use_3category=False,
+        use_9category=False,
     ):
         """
         初始化MFCAD2数据模块。
@@ -269,6 +324,8 @@ class MFCAD2DataModule(L.LightningDataModule):
         self.ds_train = None
         self.ds_valid = None
         self.ds_test = None
+        self.use_3category = use_3category
+        self.use_9category = use_9category
     def setup(self, stage: str = None):
         """
         根据不同阶段(stage)初始化数据集。
@@ -289,6 +346,8 @@ class MFCAD2DataModule(L.LightningDataModule):
                 random_rotate=self.random_rotate,
                 num_train_data=self.num_train_data,
                 transform=self.transform,
+                use_3category=self.use_3category,
+                use_9category=self.use_9category,
             )
             # [:5]
             # 验证集
@@ -299,6 +358,8 @@ class MFCAD2DataModule(L.LightningDataModule):
                 center_and_scale=self.center_and_scale,
                 random_rotate=False,  # 验证集不使用随机旋转
                 transform=self.transform,
+                use_3category=self.use_3category,
+                use_9category=self.use_9category,
             )
         elif stage == "test":
             self.ds_test = MFCAD2Dataset(
@@ -308,6 +369,8 @@ class MFCAD2DataModule(L.LightningDataModule):
                 center_and_scale=self.center_and_scale,
                 random_rotate=False,  # 测试集不使用随机旋转
                 transform=self.transform,
+                use_3category=self.use_3category,
+                use_9category=self.use_9category,
             )
         else:
             raise NotImplementedError("仅支持训练/验证阶段的数据加载。")
@@ -395,24 +458,24 @@ class MFCAD2DataModule(L.LightningDataModule):
         )
 
 
-if __name__ == "__main__":
-    # 测试MFCAD2DataModule
-    data_module = MFCAD2DataModule(
-        root_dir=r"E:\AAGnetV2\aagnet\MFCAD2",
-        batch_size=32,
-        normalize=False,
-        center_and_scale=True,
-    )
+# if __name__ == "__main__":
+#     # 测试MFCAD2DataModule
+#     data_module = MFCAD2DataModule(
+#         root_dir=r"E:\AAGnetV2\aagnet\MFCAD2",
+#         batch_size=32,
+#         normalize=False,
+#         center_and_scale=True,
+#     )
     
-    # 必须先调用setup()方法初始化数据集
-    data_module.setup(stage="fit")
+#     # 必须先调用setup()方法初始化数据集
+#     data_module.setup(stage="fit")
     
-    # 获取训练数据加载器
-    train_loader = data_module.train_dataloader()
+#     # 获取训练数据加载器
+#     train_loader = data_module.train_dataloader()
     
-    # 迭代一个批次
-    for batch in train_loader:
-        print("Batch graph nodes:", batch["graph"].num_nodes())
-        print("Batch graph edges:", batch["graph"].num_edges())
-        print("Batch node labels:", batch["graph"].ndata["y"])
-        break  # 只迭代一个批次
+#     # 迭代一个批次
+#     for batch in train_loader:
+#         print("Batch graph nodes:", batch["graph"].num_nodes())
+#         print("Batch graph edges:", batch["graph"].num_edges())
+#         print("Batch node labels:", batch["graph"].ndata["y"])
+#         break  # 只迭代一个批次
