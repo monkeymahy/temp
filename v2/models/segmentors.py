@@ -1,11 +1,13 @@
 import torch
 from torch import nn
 import lightning.pytorch as L
-from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
+from torchmetrics.classification import (
+    MulticlassAccuracy,
+    MulticlassJaccardIndex,
+)
 
 import models.encoders as encoders
 from .layers import MLP
-from v2.constant import LABEL_NAMES
 
 
 ###############################################################################
@@ -239,9 +241,13 @@ class AAGNetSegmentor(L.LightningModule):
         # Compute hidden edge features
         edge_feat = self.edge_attr_encoder(input_edge_attr)
         # Message pass and compute per-face(node) and global embeddings
-        node_emb, graph_emb = self.graph_encoder(batched_graph, node_feat, edge_feat)
+        node_emb, graph_emb = self.graph_encoder(
+            batched_graph, node_feat, edge_feat
+        )
         # concatenated to the per-node embeddings
-        num_nodes_per_graph = batched_graph.batch_num_nodes().to(graph_emb.device)
+        num_nodes_per_graph = batched_graph.batch_num_nodes().to(
+            graph_emb.device
+        )
         graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(
             graph_emb.device
         )
@@ -272,7 +278,10 @@ class AAGNetSegmentor(L.LightningModule):
             "tra_seg_acc_avg": self.tra_seg_acc,
             "tra_seg_iou_avg": self.tra_seg_iou,
         }
-        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+        LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names()
+        for i, (_acc, _iou) in enumerate(
+            zip(seg_acc_per_class, seg_iou_per_class)
+        ):
             _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
@@ -280,7 +289,9 @@ class AAGNetSegmentor(L.LightningModule):
             _dic,
             on_step=False,
             on_epoch=True,
-            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
+            batch_size=seg_label.shape[
+                0
+            ],  # TODO 此处并非batch size，后续需要注意
         )
 
         return loss
@@ -306,7 +317,10 @@ class AAGNetSegmentor(L.LightningModule):
             "val_seg_acc_avg": self.val_seg_acc,
             "val_seg_iou_avg": self.val_seg_iou,
         }
-        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+        LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names()
+        for i, (_acc, _iou) in enumerate(
+            zip(seg_acc_per_class, seg_iou_per_class)
+        ):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
@@ -314,7 +328,9 @@ class AAGNetSegmentor(L.LightningModule):
             _dic,
             on_step=False,
             on_epoch=True,
-            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
+            batch_size=seg_label.shape[
+                0
+            ],  # TODO 此处并非batch size，后续需要注意
         )
 
     def test_step(
@@ -338,7 +354,10 @@ class AAGNetSegmentor(L.LightningModule):
             "tst_seg_acc_avg": self.tst_seg_acc,
             "tst_seg_iou_avg": self.tst_seg_iou,
         }
-        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+        LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names()
+        for i, (_acc, _iou) in enumerate(
+            zip(seg_acc_per_class, seg_iou_per_class)
+        ):
             _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
@@ -346,7 +365,9 @@ class AAGNetSegmentor(L.LightningModule):
             _dic,
             on_step=False,
             on_epoch=True,
-            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
+            batch_size=seg_label.shape[
+                0
+            ],  # TODO 此处并非batch size，后续需要注意
         )
 
     def configure_optimizers(self):
