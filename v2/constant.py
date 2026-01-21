@@ -1,51 +1,10 @@
-LABEL_NAMES = [
-    # 9类别
-    # "other",   
-    # "Through hole",
-    # "Blind hole",
-    # "Triangular through slot",
-    # "Rectangular through slot",
-    # "Circular through slot",
-    # "Rectangular blind slot",
-    # "Vertical circular end blind slot",
-    # "Horizontal circular end blind slot",
+# 此文件无用，待删除
 
-    # 根据数据集，修改各个类别的名字
-    # "other",
-    # "hole",
-    # "slot",
-
-    # MFCAD2
-    # "Chamfer",
-    # "Through hole",
-    # "Triangular passage",
-    # "Rectangular passage",
-    # "6-sided passage",
-    # "Triangular through slot",
-    # "Rectangular through slot",
-    # "Circular through slot",
-    # "Rectangular through step",
-    # "2-sided through step",
-    # "Slanted through step",
-    # "O-ring",
-    # "Blind hole",
-    # "Triangular pocket",
-    # "Rectangular pocket",
-    # "6-sided pocket",
-    # "Circular end pocket",
-    # "Rectangular blind slot",
-    # "Vertical circular end blind slot",
-    # "Horizontal circular end blind slot",
-    # "Triangular blind step",
-    # "Circular blind step",
-    # "Rectangular blind step",
-    # "Round",
-    # "Stock",
-
-    "slot groove",
-    "pocket",
-    "planar",
-    "hole",
-    "notch,boss,wedm,chamfer",
-    "other",
-]
+# LABEL_NAMES = [
+#     "slot groove",
+#     "pocket",
+#     "planar",
+#     "hole",
+#     "notch,boss,wedm,chamfer",
+#     "other",
+# ]

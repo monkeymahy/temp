@@ -1,11 +1,13 @@
 import torch
 from torch import nn
 import lightning.pytorch as L
-from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
+from torchmetrics.classification import (
+    MulticlassAccuracy,
+    MulticlassJaccardIndex,
+)
 
 import models.encoders as encoders
 from .layers import MLP
-from v2.constant import LABEL_NAMES
 
 
 ###############################################################################
@@ -306,14 +308,14 @@ class AAGNetSegmentor(L.LightningModule):
         # 计算边隐藏特征
         # 通过边属性编码器处理边属性
         edge_feat = self.edge_attr_encoder(input_edge_attr)
-        
-        # 图神经网络消息传递：计算每个节点(面)的嵌入和全局图嵌入
-        # 图编码器通过消息传递机制，聚合节点和边的信息
-        node_emb, graph_emb = self.graph_encoder(batched_graph, node_feat, edge_feat)
-        
-        # 将全局图嵌入复制到每个节点(面)
-        # 使每个节点都能获取全局上下文信息
-        num_nodes_per_graph = batched_graph.batch_num_nodes().to(graph_emb.device)
+        # Message pass and compute per-face(node) and global embeddings
+        node_emb, graph_emb = self.graph_encoder(
+            batched_graph, node_feat, edge_feat
+        )
+        # concatenated to the per-node embeddings
+        num_nodes_per_graph = batched_graph.batch_num_nodes().to(
+            graph_emb.device
+        )
         graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(
             graph_emb.device
         )
@@ -365,18 +367,21 @@ class AAGNetSegmentor(L.LightningModule):
             "tra_seg_acc_avg": self.tra_seg_acc,  # 平均准确率
             "tra_seg_iou_avg": self.tra_seg_iou,  # 平均IOU
         }
-        
-        # 添加每个类别的指标日志
-        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+        LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names()
+        for i, (_acc, _iou) in enumerate(
+            zip(seg_acc_per_class, seg_iou_per_class)
+        ):
             _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         # 记录指标
         self.log_dict(
             _dic,
-            on_step=False,  # 不在每个step记录，只在epoch结束时记录
-            on_epoch=True,  # 在epoch结束时记录
-            batch_size=seg_label.shape[0],  # TODO: 此处使用的是节点数量而非批次大小，后续需要修正
+            on_step=False,
+            on_epoch=True,
+            batch_size=seg_label.shape[
+                0
+            ],  # TODO 此处并非batch size，后续需要注意
         )
 
         return loss
@@ -415,18 +420,21 @@ class AAGNetSegmentor(L.LightningModule):
             "val_seg_acc_avg": self.val_seg_acc,  # 平均准确率
             "val_seg_iou_avg": self.val_seg_iou,  # 平均IOU
         }
-        
-        # 添加每个类别的指标日志
-        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+        LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names()
+        for i, (_acc, _iou) in enumerate(
+            zip(seg_acc_per_class, seg_iou_per_class)
+        ):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         # 记录指标
         self.log_dict(
             _dic,
-            on_step=False,  # 不在每个step记录，只在epoch结束时记录
-            on_epoch=True,  # 在epoch结束时记录
-            batch_size=seg_label.shape[0],  # TODO: 此处使用的是节点数量而非批次大小，后续需要修正
+            on_step=False,
+            on_epoch=True,
+            batch_size=seg_label.shape[
+                0
+            ],  # TODO 此处并非batch size，后续需要注意
         )
 
     def test_step(
@@ -463,18 +471,21 @@ class AAGNetSegmentor(L.LightningModule):
             "tst_seg_acc_avg": self.tst_seg_acc,  # 平均准确率
             "tst_seg_iou_avg": self.tst_seg_iou,  # 平均IOU
         }
-        
-        # 添加每个类别的指标日志
-        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
+        LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names()
+        for i, (_acc, _iou) in enumerate(
+            zip(seg_acc_per_class, seg_iou_per_class)
+        ):
             _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         # 记录指标
         self.log_dict(
             _dic,
-            on_step=False,  # 不在每个step记录，只在epoch结束时记录
-            on_epoch=True,  # 在epoch结束时记录
-            batch_size=seg_label.shape[0],  # TODO: 此处使用的是节点数量而非批次大小，后续需要修正
+            on_step=False,
+            on_epoch=True,
+            batch_size=seg_label.shape[
+                0
+            ],  # TODO 此处并非batch size，后续需要注意
         )
 
     def configure_optimizers(self):
