@@ -1,14 +1,14 @@
 LABEL_NAMES = [
     # 9类别
-    "other",   
-    "Through hole",
-    "Blind hole",
-    "Triangular through slot",
-    "Rectangular through slot",
-    "Circular through slot",
-    "Rectangular blind slot",
-    "Vertical circular end blind slot",
-    "Horizontal circular end blind slot",
+    # "other",   
+    # "Through hole",
+    # "Blind hole",
+    # "Triangular through slot",
+    # "Rectangular through slot",
+    # "Circular through slot",
+    # "Rectangular blind slot",
+    # "Vertical circular end blind slot",
+    # "Horizontal circular end blind slot",
 
     # 根据数据集，修改各个类别的名字
     # "other",
@@ -42,10 +42,10 @@ LABEL_NAMES = [
     # "Round",
     # "Stock",
 
-    # "slot groove",
-    # "pocket",
-    # "planar",
-    # "hole",
-    # "notch,boss,wedm,chamfer",
-    # "other",
+    "slot groove",
+    "pocket",
+    "planar",
+    "hole",
+    "notch,boss,wedm,chamfer",
+    "other",
 ]

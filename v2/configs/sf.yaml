@@ -61,7 +61,7 @@ model:
   n_epochs: 200
 
 data:
-  root_dir: C:\Data\SF-JSON
+  root_dir: E:\AAGnetV2\aagnet\SF-JSON
   normalize: False
   center_and_scale: False
   random_rotate: False
