@@ -185,7 +185,7 @@ class SFDataset(Dataset):  # 显式继承 Dataset，增强兼容性与可读性
             labels_data, dtype=np.int32
         )  # 转为 int32 的 numpy 数组（更省内存）
         labels_np = self.label_mapping()[
-            labels_np
+            labels_np  # NOTE `如果使用6类，注释掉这行`
         ]  # 应用标签映射（numpy 索引更高效）
         one_graph["graph"].ndata["y"] = torch.from_numpy(
             labels_np
