@@ -38,7 +38,7 @@ trainer:
         save_last: true
 
 model:
-  num_classes: 9                 
+  num_classes: 3                 
   arch: AAGNetGraphEncoder
   edge_attr_dim: 12
   node_attr_dim: 10
@@ -61,8 +61,8 @@ model:
   lr: 1e-2
   weight_decay: 1e-2
   n_epochs: 200
-  use_class_weight: false
-  class_samples: None
+  # use_class_weight: false
+  # class_samples: None
 
 data:
   # root_dir: D:\510431\code\aagnet\MFCAD2
@@ -76,5 +76,5 @@ data:
   drop_last: False
   num_workers: 2
   prefetch_factor: 4
-  use_3category: False
-  use_9category: True
+  # use_3category: False
+  # use_9category: True

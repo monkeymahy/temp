@@ -23,6 +23,111 @@ class MFCAD2Dataset(Dataset):
     """
     原始的MFCAD2数据集类，用于加载和处理MFCAD2数据集
     """
+    def label_names(self) -> list[str]:
+        """返回分类类别名称列表。"""
+
+        if not hasattr(self, "_label_names"):
+            # self._label_names = [  # 原始类别名称列表
+                #"Chamfer",
+                # "Through hole",
+                # "Triangular passage",
+                # "Rectangular passage",
+                # "6-sided passage",
+                # "Triangular through slot",
+                # "Rectangular through slot",
+                # "Circular through slot",
+                # "Rectangular through step",
+                # "2-sided through step",
+                # "Slanted through step",
+                # "O-ring",
+                # "Blind hole",
+                # "Triangular pocket",
+                # "Rectangular pocket",
+                # "6-sided pocket",
+                # "Circular end pocket",
+                # "Rectangular blind slot",
+                # "Vertical circular end blind slot",
+                # "Horizontal circular end blind slot",
+                # "Triangular blind step",
+                # "Circular blind step",
+                # "Rectangular blind step",
+                # "Round",
+                # "Stock",
+            # ]
+            self._label_names = [  # 类别缩减后的类别名称列表
+                "other",
+                "hole",
+                "slot",
+            ]
+        return self._label_names  # 返回常量中的类别名称列表
+
+    def label_mapping(self) -> dict[int, int]:
+        """返回原始标签到训练标签的映射。"""
+        # mapping = {
+        #     0: 0,  
+        #     1: 1,  
+        #     2: 0,  
+        #     3: 0, 
+        #     4: 0,  
+        #     5: 2,  
+        #     6: 2, 
+        #     7: 2,  
+        #     8: 0,  
+        #     9: 0,  
+        #     10: 0,  
+        #     11: 0, 
+        #     12: 1,  
+        #     13: 0, 
+        #     14: 0,  
+        #     15: 0,  
+        #     16: 0,  
+        #     17: 2,  
+        #     18: 2,  
+        #     19: 2,  
+        #     20: 0,  
+        #     21: 0,  
+        #     22: 0,  
+        #     23: 0,  
+        # }
+        
+        # 9类别映射
+        # mapping = {
+        #     0: 0,   # other -> other
+        #     1: 1,   # Through hole -> Through hole
+        #     2: 0,   # other -> other
+        #     3: 0,   # other -> other
+        #     4: 0,   # other -> other
+        #     5: 3,   # Triangular through slot -> Triangular through slot
+        #     6: 4,   # Rectangular through slot -> Rectangular through slot
+        #     7: 5,   # Circular through slot -> Circular through slot
+        #     8: 0,   # other -> other
+        #     9: 0,   # other -> other
+        #     10: 0,  # other -> other
+        #     11: 0,  # other -> other
+        #     12: 2,  # Blind hole -> Blind hole
+        #     13: 0,  # other -> other
+        #     14: 0,  # other -> other
+        #     15: 0,  # other -> other
+        #     16: 0,  # other -> other
+        #     17: 6,  # Rectangular blind slot -> Rectangular blind slot
+        #     18: 7,  # Vertical circular end blind slot -> Vertical circular end blind slot
+        #     19: 8,  # Horizontal circular end blind slot -> Horizontal circular end blind slot
+        #     20: 0,  # other -> other
+        #     21: 0,  # other -> other
+        #     22: 0,  # other -> other
+        #     23: 0,  # other -> other
+        #     24: 0,  # other -> other
+        # }
+        # 9类别查找表（注释掉）
+        # self.lut = np.asarray([0, 1, 0, 0, 0, 3, 4, 5, 0, 0, 0, 0, 2, 0, 0, 0, 0, 6, 7, 8, 0, 0, 0, 0, 0, 0], dtype=np.int32)
+        
+        if not hasattr(self, "lut"):
+            # 根据映射关系创建查找表
+            # 映射规则：0:other, 1:hole, 2:slot
+            self.lut = np.asarray([0, 1, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0], dtype=np.int32)
+
+        return self.lut  # 返回常量中的标签映射字典
+
 
     def __init__(
         self,
@@ -124,13 +229,6 @@ class MFCAD2Dataset(Dataset):
         )
         print(f">>> Filtered {len(self.filenames)} files for split '{split}'.")
 
-    def num_classes(self):
-        if self.use_3category is True:
-            return 3
-        elif self.use_9category is True:
-            return 9  # 九类别映射：0-other, 1-Through hole, 2-Blind hole, 3-Triangular through slot, 4-Rectangular through slot, 5-Circular through slot, 6-Rectangular blind slot, 7-Vertical circular end blind slot, 8-Horizontal circular end blind slot
-        else:
-            return 25  # MFCAD2原始25类数据
 
     def _collate(self, batch):
         """
@@ -163,53 +261,13 @@ class MFCAD2Dataset(Dataset):
         label_file = self.root_dir.joinpath("labels").joinpath(fn + ".json")
         with open(str(label_file), "r") as read_file:
             labels_data = json.load(read_file)
-        labels_data = np.array(labels_data, dtype=np.int32)
+        
+        labels_np = np.asarray(
+            labels_data, dtype=np.int32
+        )  # 转为 int32 的 numpy 数组（更省内存）
+        labels_np = self.label_mapping()[labels_np]  # NOTE `如果使用6类，注释掉这行` 
 
-          # 类别映射逻辑
-        if self.use_3category is True:
-            # 定义类别映射
-            mapped_labels = np.zeros_like(labels_data)
-            
-            # 映射到1-hole的类别
-            hole_classes = [1, 12]  # 1 - Through hole, 12 - Blind hole
-            # 映射到2-slot的类别
-            slot_classes = [5, 6, 7, 17, 18, 19]  # 5-7: through slots, 17-19: blind slots
-            
-            # 执行映射
-            for i, label in enumerate(labels_data):
-                if label in hole_classes:
-                    mapped_labels[i] = 1  # hole
-                elif label in slot_classes:
-                    mapped_labels[i] = 2  # slot
-                else:
-                    mapped_labels[i] = 0  # other
-            
-            labels_data = mapped_labels #array([1, 2, 1, 2, 0], dtype=int32)
-        elif self.use_9category is True:
-            # 定义9类别映射
-            mapped_labels = np.zeros_like(labels_data)
-            
-            # 定义类别映射字典
-            category_map = {
-                1: 1,    # Through hole
-                12: 2,   # Blind hole
-                5: 3,    # Triangular through slot
-                6: 4,    # Rectangular through slot
-                7: 5,    # Circular through slot
-                17: 6,   # Rectangular blind slot
-                18: 7,   # Vertical circular end blind slot
-                19: 8    # Horizontal circular end blind slot
-            }
-            
-            # 执行映射
-            for i, label in enumerate(labels_data):
-                if label in category_map:
-                    mapped_labels[i] = category_map[label]
-                else:
-                    mapped_labels[i] = 0  # other
-            
-            labels_data = mapped_labels
-        sample["graph"].ndata["y"] = torch.tensor(labels_data).long()
+        sample["graph"].ndata["y"] = torch.tensor(labels_np).long()
 
         return sample
 
