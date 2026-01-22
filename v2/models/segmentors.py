@@ -12,15 +12,29 @@ from .layers import MLP
 
 ###############################################################################
 # Segmentation model
+# AAG-Net solid face segmentation model for B-rep (Boundary Representation) data
 ###############################################################################
 
 
 class AAGNetSegmentor(L.LightningModule):
     """
     AAG-Net solid face segmentation model
+    基于 Attributed Adjacency Graph (AAG) 的实体面分割模型，用于 B-rep 数据的面分类任务
+    
+    模型结构：
+    1. 节点(面)属性编码器：将输入的面属性映射到嵌入空间
+    2. 节点(面)网格编码器：处理2D UV网格特征
+    3. 边属性编码器：将输入的边属性映射到嵌入空间
+    4. 图编码器：通过消息传递计算节点(面)嵌入和全局图嵌入
+    5. 分割头：将节点嵌入映射到分类概率
+    
+    训练流程：
+    1. 前向传播：计算每个面的分类logits
+    2. 损失计算：使用交叉熵损失函数
+    3. 指标计算：计算准确率和IOU
+    4. 优化器更新：使用AdamW优化器和余弦退火学习率调度器
     """
 
-    # 20251029
     def __init__(
         self,
         num_classes,
@@ -49,32 +63,57 @@ class AAGNetSegmentor(L.LightningModule):
     ):
         """
         Initialize the AAG-Net solid face segmentation model
-
+        
         Args:
-            num_classes (int): Number of classes to output per-face
-            crv_in_channels (int, optional): Number of input channels for the 1D edge UV-grids
-            crv_emb_dim (int, optional): Embedding dimension for the 1D edge UV-grids. Defaults to 64.
-            srf_emb_dim (int, optional): Embedding dimension for the 2D face UV-grids. Defaults to 64.
-            graph_emb_dim (int, optional): Embedding dimension for the whole graph. Defaults to 128.
-            dropout (float, optional): Dropout for the final non-linear classifier. Defaults to 0.3.
+            num_classes (int): 每个面要输出的类别数量
+            arch (str): 图编码器的架构名称
+            edge_attr_dim (int): 边属性的输入维度
+            node_attr_dim (int): 节点属性的输入维度
+            edge_attr_emb (int): 边属性的嵌入维度
+            node_attr_emb (int): 节点属性的嵌入维度
+            edge_grid_dim (int): 边UV网格的输入通道数
+            node_grid_dim (int): 节点UV网格的输入通道数
+            edge_grid_emb (int): 边UV网格的嵌入维度
+            node_grid_emb (int): 节点UV网格的嵌入维度
+            num_layers (int): 图编码器的层数
+            delta (float): 图编码器中的delta参数
+            mlp_ratio (int, optional): MLP扩展比例. Defaults to 4.
+            drop (float, optional): Dropout率. Defaults to 0.0.
+            drop_path (float, optional): DropPath率. Defaults to 0.0.
+            head_hidden_dim (int, optional): 分类头的隐藏层维度. Defaults to 256.
+            conv_on_edge (bool, optional): 是否在边上执行卷积操作. Defaults to True.
+            use_uv_gird (bool, optional): 是否使用UV网格特征. Defaults to True.
+            use_edge_attr (bool, optional): 是否使用边属性. Defaults to True.
+            use_face_attr (bool, optional): 是否使用面属性. Defaults to True.
+            lr (float, optional): 学习率. Defaults to 1e-4.
+            weight_decay (float, optional): 权重衰减. Defaults to 0.
+            n_epochs (int, optional): 训练轮数. Defaults to 200.
         """
         super().__init__()
-        # A linear network to encode B-rep face attributes
+        # 模型配置参数
         self.use_uv_gird = use_uv_gird
         self.use_edge_attr = use_edge_attr
         self.use_face_attr = use_face_attr
         self.lr = lr
         self.weight_decay = weight_decay
         self.n_epochs = n_epochs
+        
+        # 损失函数：使用交叉熵损失函数
+        # 适用于多分类任务，自动处理类别不平衡问题
         self.seg_loss = nn.CrossEntropyLoss()
 
+        # 节点(面)属性编码器：将输入的面属性映射到嵌入空间
+        # 包含线性层和层归一化，用于提取面属性的特征表示
         self.node_attr_encoder = nn.Sequential(
-            nn.Linear(node_attr_dim, node_attr_emb),
-            nn.LayerNorm(node_attr_emb),
+            nn.Linear(node_attr_dim, node_attr_emb),  # 线性变换到嵌入维度
+            nn.LayerNorm(node_attr_emb),  # 层归一化，加速训练和提高稳定性
         )
 
+        # 节点(面)网格编码器：处理2D UV网格特征
+        # 当node_grid_dim > 0时，使用卷积神经网络提取网格特征
         if node_grid_dim:
             self.node_grid_encoder = nn.Sequential(
+                # 第一层卷积：输入通道数 -> 输出通道数(node_grid_emb // 4)
                 nn.Conv2d(
                     node_grid_dim,
                     node_grid_emb // 4,
@@ -82,8 +121,9 @@ class AAGNetSegmentor(L.LightningModule):
                     stride=1,
                     padding=1,
                 ),
-                nn.BatchNorm2d(node_grid_emb // 4),
-                nn.Mish(),
+                nn.BatchNorm2d(node_grid_emb // 4),  # 批归一化
+                nn.Mish(),  # Mish激活函数，比ReLU有更好的性能
+                # 第二层卷积：通道数翻倍
                 nn.Conv2d(
                     node_grid_emb // 4,
                     node_grid_emb // 2,
@@ -91,8 +131,9 @@ class AAGNetSegmentor(L.LightningModule):
                     stride=1,
                     padding=1,
                 ),
-                nn.BatchNorm2d(node_grid_emb // 2),
-                nn.Mish(),
+                nn.BatchNorm2d(node_grid_emb // 2),  # 批归一化
+                nn.Mish(),  # Mish激活函数
+                # 第三层卷积：通道数翻倍到目标嵌入维度
                 nn.Conv2d(
                     node_grid_emb // 2,
                     node_grid_emb,
@@ -100,145 +141,172 @@ class AAGNetSegmentor(L.LightningModule):
                     stride=1,
                     padding=1,
                 ),
-                nn.BatchNorm2d(node_grid_emb),
-                nn.Mish(),
-                nn.AdaptiveAvgPool2d(1),
-                nn.Flatten(1),
+                nn.BatchNorm2d(node_grid_emb),  # 批归一化
+                nn.Mish(),  # Mish激活函数
+                nn.AdaptiveAvgPool2d(1),  # 全局平均池化，将特征图转为向量
+                nn.Flatten(1),  # 展平特征，去除空间维度
             )
         else:
+            # 当node_grid_dim为0时，不使用网格编码器
             self.node_grid_encoder = None
 
-        # A linear network to encode B-rep edge attributes
+        # 边属性编码器：将输入的边属性映射到嵌入空间
+        # 包含线性层和层归一化，用于提取边属性的特征表示
         self.edge_attr_encoder = nn.Sequential(
-            nn.Linear(edge_attr_dim, edge_attr_emb),
-            nn.LayerNorm(edge_attr_emb),
+            nn.Linear(edge_attr_dim, edge_attr_emb),  # 线性变换到嵌入维度
+            nn.LayerNorm(edge_attr_emb),  # 层归一化
         )
+        
+        # 边网格编码器：处理1D UV网格特征（预留功能，尚未实现）
         if edge_grid_dim:
-            # TODO 这是原作者准备优化的地方？
+            # TODO: 实现边网格编码器
             pass
+        
+        # 计算最终的节点和边嵌入维度
+        # 节点嵌入 = 属性嵌入 + 网格嵌入
         node_emb = node_attr_emb + node_grid_emb
+        # 边嵌入 = 属性嵌入 + 网格嵌入
         edge_emb = edge_attr_emb + edge_grid_emb
-        # A graph neural network that message passes face and edge features
-        encoder = getattr(encoders, arch)  # todo 简化
+        
+        # 图编码器：基于指定架构初始化图神经网络
+        # 通过动态获取编码器类，实现不同图编码器的灵活切换
+        encoder = getattr(encoders, arch)  # 动态获取编码器类
         self.graph_encoder = encoder(
-            node_dim=node_emb,
-            edge_dim=edge_emb,
-            num_layers=num_layers,
-            delta=delta,
-            mlp_ratio=mlp_ratio,
-            drop=drop,
-            drop_path=drop_path,
-            conv_on_edge=conv_on_edge,
+            node_dim=node_emb,  # 节点嵌入维度
+            edge_dim=edge_emb,  # 边嵌入维度
+            num_layers=num_layers,  # 编码器层数
+            delta=delta,  # delta参数
+            mlp_ratio=mlp_ratio,  # MLP扩展比例
+            drop=drop,  # Dropout率
+            drop_path=drop_path,  # DropPath率
+            conv_on_edge=conv_on_edge,  # 是否在边上执行卷积
         )
+        
+        # 计算最终输出嵌入维度（节点嵌入 + 全局图嵌入）
+        # 将全局图嵌入与每个节点的局部嵌入拼接，提供更丰富的上下文信息
         final_out_emb = 2 * node_emb
-        # A non-linear classifier that maps face embeddings to face logits
+        
+        # 分割头：将节点嵌入映射到分类概率
+        # 使用多层感知机(MLP)实现，包含隐藏层和输出层
         self.seg_head = MLP(
-            num_layers=2,
-            input_dim=final_out_emb,
-            hidden_dim=head_hidden_dim,
-            output_dim=num_classes,
-            norm=nn.LayerNorm,
-            act=nn.Mish,
+            num_layers=2,  # MLP层数
+            input_dim=final_out_emb,  # 输入维度
+            hidden_dim=head_hidden_dim,  # 隐藏层维度
+            output_dim=num_classes,  # 输出维度（类别数）
+            norm=nn.LayerNorm,  # 归一化层
+            act=nn.Mish,  # 激活函数
         )
 
+        # 初始化评估指标
+        # 为训练集、验证集和测试集分别初始化准确率和IOU指标
         self._init_metrics(num_classes=num_classes)
 
     def _init_metrics(self, num_classes):
         """
-        初始化各类指标
+        初始化各类评估指标
+        为训练集、验证集和测试集分别初始化准确率和IOU指标
+        
+        Args:
+            num_classes (int): 类别数量，用于初始化多分类评估指标
         """
         # 训练集指标
         self.tra_seg_acc = MulticlassAccuracy(
             num_classes=num_classes,
-            average="macro",
+            average="macro",  # 宏平均：计算所有类的指标并取平均
         )
         self.tra_seg_iou = MulticlassJaccardIndex(
             num_classes=num_classes,
-            average="macro",
+            average="macro",  # 宏平均：计算所有类的IOU并取平均
         )
         self.tra_seg_acc_per_class = MulticlassAccuracy(
             num_classes=num_classes,
-            average=None,
+            average=None,  # None：返回每个类的指标
         )
         self.tra_seg_iou_per_class = MulticlassJaccardIndex(
             num_classes=num_classes,
-            average=None,
+            average=None,  # None：返回每个类的IOU
         )
 
         # 验证集指标
         self.val_seg_acc = MulticlassAccuracy(
             num_classes=num_classes,
-            average="macro",
+            average="macro",  # 宏平均
         )
         self.val_seg_iou = MulticlassJaccardIndex(
             num_classes=num_classes,
-            average="macro",
+            average="macro",  # 宏平均
         )
         self.val_seg_acc_per_class = MulticlassAccuracy(
             num_classes=num_classes,
-            average=None,
+            average=None,  # 返回每个类的指标
         )
         self.val_seg_iou_per_class = MulticlassJaccardIndex(
             num_classes=num_classes,
-            average=None,
+            average=None,  # 返回每个类的IOU
         )
 
-        # 测试集论文
+        # 测试集指标
         self.tst_seg_acc = MulticlassAccuracy(
             num_classes=num_classes,
-            average="macro",
+            average="macro",  # 宏平均
         )
         self.tst_seg_iou = MulticlassJaccardIndex(
             num_classes=num_classes,
-            average="macro",
+            average="macro",  # 宏平均
         )
         self.tst_seg_acc_per_class = MulticlassAccuracy(
             num_classes=num_classes,
-            average=None,
+            average=None,  # 返回每个类的指标
         )
         self.tst_seg_iou_per_class = MulticlassJaccardIndex(
             num_classes=num_classes,
-            average=None,
+            average=None,  # 返回每个类的IOU
         )
 
     def forward(self, batched_graph):
         """
-        Forward pass
-
+        Forward pass 前向传播
+        
         Args:
-            batched_graph (dgl.Graph): A batched DGL graph containing the face 2D UV-grids in node features (ndata['x']) and 1D edge UV-grids in the edge features (edata['x']).
-
+            batched_graph (dgl.Graph): 批量DGL图数据，其中包含：
+                - 节点特征 (ndata['x']): 面属性
+                - 节点网格 (ndata['grid']): 面的2D UV网格
+                - 边特征 (edata['x']): 边属性
+        
         Returns:
-            torch.tensor:
-                Logits (total_nodes_in_batch x num_classes)
-                Bottom Logits (total_nodes_in_batch x 1)
-            list [torch.tensor]:
-                Face adjacency graph (num_graph_per_batch, num_faces x num_faces)
+            torch.tensor: 每个面的分类logits (total_nodes_in_batch x num_classes)
         """
-        # Input features
+        # 获取输入特征
+        # 根据配置决定是否使用面属性
         input_node_attr = (
             batched_graph.ndata["x"]
             if self.use_face_attr
-            else torch.zeros_like(batched_graph.ndata["x"])
+            else torch.zeros_like(batched_graph.ndata["x"])  # 如果不使用面属性，则置为0
         )
+        # 根据配置决定是否使用UV网格
         input_node_grid = (
             batched_graph.ndata["grid"]
             if self.use_uv_gird
-            else torch.zeros_like(batched_graph.ndata["grid"])
+            else torch.zeros_like(batched_graph.ndata["grid"])  # 如果不使用UV网格，则置为0
         )
+        # 根据配置决定是否使用边属性
         input_edge_attr = (
             batched_graph.edata["x"]
             if self.use_edge_attr
-            else torch.zeros_like(batched_graph.edata["x"])
+            else torch.zeros_like(batched_graph.edata["x"])  # 如果不使用边属性，则置为0
         )
-        # input_edge_grid = batched_graph.edata["grid"]
-        # Compute hidden face features
+        
+        # 计算节点(面)隐藏特征
+        # 通过属性编码器处理面属性
         node_feat = self.node_attr_encoder(input_node_attr)
+        # 如果使用网格编码器，则处理网格特征并与属性特征拼接
         if self.node_grid_encoder:
-            assert input_node_grid.numel() > 0
+            assert input_node_grid.numel() > 0, "输入网格特征不能为空"
             node_grid_feat = self.node_grid_encoder(input_node_grid)
-            node_feat = torch.concat([node_feat, node_grid_feat], dim=1)
-        # Compute hidden edge features
+            node_feat = torch.concat([node_feat, node_grid_feat], dim=1)  # 拼接属性特征和网格特征
+        
+        # 计算边隐藏特征
+        # 通过边属性编码器处理边属性
         edge_feat = self.edge_attr_encoder(input_edge_attr)
         # Message pass and compute per-face(node) and global embeddings
         node_emb, graph_emb = self.graph_encoder(
@@ -251,8 +319,13 @@ class AAGNetSegmentor(L.LightningModule):
         graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(
             graph_emb.device
         )
+        
+        # 拼接局部节点嵌入和全局图嵌入
+        # 结合局部特征和全局上下文，提高分类性能
         local_global_feat = torch.cat((node_emb, graph_emb), dim=1)
-        # Map to logits
+        
+        # 映射到分类logits
+        # 通过分割头将嵌入向量映射到类别概率
         seg_out = self.seg_head(local_global_feat)
 
         return seg_out
@@ -262,21 +335,37 @@ class AAGNetSegmentor(L.LightningModule):
         batch: dict,
         batch_idx: int,
     ):
+        """
+        训练步骤
+        
+        Args:
+            batch (dict): 包含图数据的批次
+            batch_idx (int): 批次索引
+            
+        Returns:
+            torch.tensor: 损失值
+        """
+        # 获取图数据和标签
         graphs = batch["graph"]
-        seg_label = graphs.ndata["y"]
+        seg_label = graphs.ndata["y"]  # 每个面的真实标签
 
+        # 前向传播获取预测结果
         seg_pred = self.forward(batched_graph=graphs)
+        
+        # 计算损失
         loss = self.seg_loss(seg_pred, seg_label)
 
+        # 更新训练指标
         self.tra_seg_acc(seg_pred, seg_label)
         self.tra_seg_iou(seg_pred, seg_label)
         seg_acc_per_class = self.tra_seg_acc_per_class(seg_pred, seg_label)
         seg_iou_per_class = self.tra_seg_iou_per_class(seg_pred, seg_label)
 
+        # 准备日志数据
         _dic = {
-            "tra_loss": loss.item(),
-            "tra_seg_acc_avg": self.tra_seg_acc,
-            "tra_seg_iou_avg": self.tra_seg_iou,
+            "tra_loss": loss.item(),  # 训练损失
+            "tra_seg_acc_avg": self.tra_seg_acc,  # 平均准确率
+            "tra_seg_iou_avg": self.tra_seg_iou,  # 平均IOU
         }
         LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names()
         for i, (_acc, _iou) in enumerate(
@@ -285,6 +374,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
+        # 记录指标
         self.log_dict(
             _dic,
             on_step=False,
@@ -301,21 +391,34 @@ class AAGNetSegmentor(L.LightningModule):
         batch: dict,
         batch_idx: int,
     ):
+        """
+        验证步骤
+        
+        Args:
+            batch (dict): 包含图数据的批次
+            batch_idx (int): 批次索引
+        """
+        # 获取图数据和标签
         graphs = batch["graph"]
-        seg_label = graphs.ndata["y"]
+        seg_label = graphs.ndata["y"]  # 每个面的真实标签
 
+        # 前向传播获取预测结果
         seg_pred = self.forward(batched_graph=graphs)
+        
+        # 计算损失
         loss = self.seg_loss(seg_pred, seg_label)
 
+        # 更新验证指标
         self.val_seg_acc(seg_pred, seg_label)
         self.val_seg_iou(seg_pred, seg_label)
         seg_acc_per_class = self.val_seg_acc_per_class(seg_pred, seg_label)
         seg_iou_per_class = self.val_seg_iou_per_class(seg_pred, seg_label)
 
+        # 准备日志数据
         _dic = {
-            "val_loss": loss.item(),
-            "val_seg_acc_avg": self.val_seg_acc,
-            "val_seg_iou_avg": self.val_seg_iou,
+            "val_loss": loss.item(),  # 验证损失
+            "val_seg_acc_avg": self.val_seg_acc,  # 平均准确率
+            "val_seg_iou_avg": self.val_seg_iou,  # 平均IOU
         }
         LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names()
         for i, (_acc, _iou) in enumerate(
@@ -324,6 +427,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
+        # 记录指标
         self.log_dict(
             _dic,
             on_step=False,
@@ -338,21 +442,34 @@ class AAGNetSegmentor(L.LightningModule):
         batch: dict,
         batch_idx: int,
     ):
+        """
+        测试步骤
+        
+        Args:
+            batch (dict): 包含图数据的批次
+            batch_idx (int): 批次索引
+        """
+        # 获取图数据和标签
         graphs = batch["graph"]
-        seg_label = graphs.ndata["y"]
+        seg_label = graphs.ndata["y"]  # 每个面的真实标签
 
+        # 前向传播获取预测结果
         seg_pred = self.forward(batched_graph=graphs)
+        
+        # 计算损失
         loss = self.seg_loss(seg_pred, seg_label)
 
+        # 更新测试指标
         self.tst_seg_acc(seg_pred, seg_label)
         self.tst_seg_iou(seg_pred, seg_label)
         seg_acc_per_class = self.tst_seg_acc_per_class(seg_pred, seg_label)
         seg_iou_per_class = self.tst_seg_iou_per_class(seg_pred, seg_label)
 
+        # 准备日志数据
         _dic = {
-            "tst_loss": loss.item(),
-            "tst_seg_acc_avg": self.tst_seg_acc,
-            "tst_seg_iou_avg": self.tst_seg_iou,
+            "tst_loss": loss.item(),  # 测试损失
+            "tst_seg_acc_avg": self.tst_seg_acc,  # 平均准确率
+            "tst_seg_iou_avg": self.tst_seg_iou,  # 平均IOU
         }
         LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names()
         for i, (_acc, _iou) in enumerate(
@@ -361,6 +478,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
+        # 记录指标
         self.log_dict(
             _dic,
             on_step=False,
@@ -371,18 +489,26 @@ class AAGNetSegmentor(L.LightningModule):
         )
 
     def configure_optimizers(self):
-        # include trainable NaN fill parameters in predictor optimizer
-
+        """
+        配置优化器和学习率调度器
+        
+        Returns:
+            tuple: (优化器列表, 学习率调度器列表)
+        """
+        # 定义优化器：使用AdamW优化器
+        # AdamW是Adam的变体，对权重衰减的处理更有效
         optimizer = torch.optim.AdamW(
             params=self.parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay,
+            lr=self.lr,  # 初始学习率
+            weight_decay=self.weight_decay,  # 权重衰减，用于正则化
         )
 
+        # 定义学习率调度器：余弦退火调度器
+        # 学习率从初始值逐渐降低到0，形成余弦曲线
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=self.n_epochs,
-            eta_min=0,
+            T_max=self.n_epochs,  # 最大迭代次数
+            eta_min=0,  # 最小学习率
         )
 
         return [optimizer], [scheduler]

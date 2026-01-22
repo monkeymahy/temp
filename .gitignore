@@ -1,7 +1,13 @@
 output/
 **/**.pyc
 training_data/
-
+MFCAD2/
+datasetmfacd/
+datasetmfinstseg/
+SF-JSON/
+SF-JSON/SF-JSON/
+v2/output_MFCAD2/
+v2/output
 # 本地调试配置(VSCode文件)
 launch.json
 
