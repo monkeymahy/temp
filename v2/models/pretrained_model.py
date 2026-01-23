@@ -64,10 +64,7 @@ class PretrainedAAGNetSegmentor(AAGNetSegmentor):
             weight_decay (float, optional): 权重衰减. Defaults to 0.
             n_epochs (int, optional): 训练轮数. Defaults to 200.
         """
-        # 首先加载预训练模型（仅用于加载权重），25分类头，传入给对象pretrained_model留着备用
-        pretrained_model = AAGNetSegmentor.load_from_checkpoint(pretrained_ckpt)
-        
-        # 使用传入的参数初始化，本模型初始化3分类头
+        # 先使用传入的参数初始化父类（不加载预训练权重）
         super().__init__(
             num_classes=num_classes,
             arch=arch,
@@ -94,8 +91,12 @@ class PretrainedAAGNetSegmentor(AAGNetSegmentor):
             n_epochs=n_epochs,
         )
         
-        # 加载预训练权重（除分类头外），加载刚才备用的pretrained_model的权重传入pretrained_state_dict
-        pretrained_state_dict = pretrained_model.state_dict()
+        # 然后加载预训练权重（除分类头外）
+        # 直接加载checkpoint文件，而不是使用load_from_checkpoint方法
+        checkpoint = torch.load(pretrained_ckpt, map_location='cpu')
+        
+        # 获取预训练权重
+        pretrained_state_dict = checkpoint['state_dict']
         
         # 移除分类头的权重
         new_state_dict = {}
@@ -103,5 +104,5 @@ class PretrainedAAGNetSegmentor(AAGNetSegmentor):
             if not key.startswith('seg_head'):
                 new_state_dict[key] = value
         
-        # 本模型加载权重
+        # 加载权重
         self.load_state_dict(new_state_dict, strict=False)

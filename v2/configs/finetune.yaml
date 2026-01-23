@@ -1,11 +1,7 @@
-# 微调配置文件
-# 使用预训练模型在目标数据集上进行微调
-
 seed_everything: 42
 
-# 最大轮数设置为50
 trainer:
-  max_epochs: 50
+  max_epochs: 200
   accelerator: gpu
   enable_checkpointing: true
   log_every_n_steps: 50
@@ -23,67 +19,54 @@ trainer:
       init_args:
         decay: 0.9516951530106196 # 0.5 ** (1 / 14)
 
-    # 这是 随机权重平均 回调的学习率，用于在训练后期对多个模型权重进行平均，以获得更稳定的模型。
     - class_path: lightning.pytorch.callbacks.StochasticWeightAveraging
       init_args:
         swa_epoch_start: 10
         swa_lrs: 0.01
 
-    # 保存top3模型
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: E:\AAGnetV2\aagnet\v2\output_finetune\finetune_checkpoints
-        filename: aagnet-finetune-{epoch:02d}-{val_seg_acc_avg:.4f}
-        save_top_k: 3
+        filename: "{epoch}-{val_seg_acc_avg:.2f}"
+        save_top_k: 1
         monitor: val_seg_acc_avg
         mode: max
         save_last: true
 
-    # # 加了一个早停回调
-    # - class_path: lightning.pytorch.callbacks.EarlyStopping
-    #   init_args:
-    #     monitor: val_seg_acc_avg
-    #     patience: 10
-    #     mode: max
-
 
 model:
-  class_path: v2.models.pretrained_model.PretrainedAAGNetSegmentor
-  init_args:
-    pretrained_ckpt: ./checkpoints/mfcad_pretrained.ckpt
-    num_classes: 6
-    arch: AAGNetGraphEncoder
-    edge_attr_dim: 12
-    node_attr_dim: 10
-    edge_attr_emb: 64
-    node_attr_emb: 64
-    edge_grid_dim: 0
-    node_grid_dim: 7
-    edge_grid_emb: 0
-    node_grid_emb: 64
-    num_layers: 3
-    delta: 2
-    mlp_ratio: 2
-    drop: 0.25
-    drop_path: 0.25
-    head_hidden_dim: 64
-    conv_on_edge: false
-    use_uv_gird: true
-    use_edge_attr: true
-    use_face_attr: true
-    lr: 1e-2                    # 学习率可以调小
-    weight_decay: 1e-2
-    n_epochs: 50
+  pretrained_ckpt: E:\AAGnetV2\aagnet\v2\output_MFCAD2\checkpoints\01-20\epoch=49-val_seg_acc_avg=0.99.ckpt
+  num_classes: 3
+  arch: AAGNetGraphEncoder
+  edge_attr_dim: 12
+  node_attr_dim: 10
+  edge_attr_emb: 64
+  node_attr_emb: 64
+  edge_grid_dim: 0
+  node_grid_dim: 7
+  edge_grid_emb: 0
+  node_grid_emb: 64
+  num_layers: 3
+  delta: 2
+  mlp_ratio: 2
+  drop: 0.25
+  drop_path: 0.25
+  head_hidden_dim: 64
+  conv_on_edge: false
+  use_uv_gird: true
+  use_edge_attr: true
+  use_face_attr: true
+  lr: 1e-2                    
+  weight_decay: 1e-2
+  n_epochs: 200
 
 data:
-  # root_dir: D:\510431\code\aagnet\MFCAD2
-  root_dir: E:\AAGnetV2\aagnet\MFCAD2
+  root_dir: E:\AAGnetV2\aagnet\SF-JSON
   normalize: False
   center_and_scale: False
   random_rotate: False
   transform: null
   batch_size: 32
-  shuffle: False # TODO need to be deleted in datamodule
   drop_last: False
   num_workers: 2
   prefetch_factor: 4
