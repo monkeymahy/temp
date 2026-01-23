@@ -8,13 +8,16 @@ from torch.utils.data import DataLoader
 
 import sys
 import os
-# 添加项目根目录到Python路径
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
-from aagnet.v2.utils.data_utils import load_one_graph, load_statistics
-from aagnet.v2.utils.data_utils import standardization, center_and_scale
-from aagnet.v2.utils.data_utils import get_random_rotation, rotate_uvgrid
-from aagnet.v2.utils.data_utils import filter_filenames_by_ids_9s
+# # 添加项目根目录到Python路径
+# sys.path.append(
+#     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+# )
+
+from v2.utils.data_utils import load_one_graph, load_statistics
+from v2.utils.data_utils import standardization, center_and_scale
+from v2.utils.data_utils import get_random_rotation, rotate_uvgrid
+from v2.utils.data_utils import filter_filenames_by_ids_9s
 
 from torch.utils.data import Dataset
 
@@ -23,36 +26,37 @@ class MFCAD2Dataset(Dataset):
     """
     原始的MFCAD2数据集类，用于加载和处理MFCAD2数据集
     """
+
     def label_names(self) -> list[str]:
         """返回分类类别名称列表。"""
 
         if not hasattr(self, "_label_names"):
             # self._label_names = [  # 原始类别名称列表
-                #"Chamfer",
-                # "Through hole",
-                # "Triangular passage",
-                # "Rectangular passage",
-                # "6-sided passage",
-                # "Triangular through slot",
-                # "Rectangular through slot",
-                # "Circular through slot",
-                # "Rectangular through step",
-                # "2-sided through step",
-                # "Slanted through step",
-                # "O-ring",
-                # "Blind hole",
-                # "Triangular pocket",
-                # "Rectangular pocket",
-                # "6-sided pocket",
-                # "Circular end pocket",
-                # "Rectangular blind slot",
-                # "Vertical circular end blind slot",
-                # "Horizontal circular end blind slot",
-                # "Triangular blind step",
-                # "Circular blind step",
-                # "Rectangular blind step",
-                # "Round",
-                # "Stock",
+            # "Chamfer",
+            # "Through hole",
+            # "Triangular passage",
+            # "Rectangular passage",
+            # "6-sided passage",
+            # "Triangular through slot",
+            # "Rectangular through slot",
+            # "Circular through slot",
+            # "Rectangular through step",
+            # "2-sided through step",
+            # "Slanted through step",
+            # "O-ring",
+            # "Blind hole",
+            # "Triangular pocket",
+            # "Rectangular pocket",
+            # "6-sided pocket",
+            # "Circular end pocket",
+            # "Rectangular blind slot",
+            # "Vertical circular end blind slot",
+            # "Horizontal circular end blind slot",
+            # "Triangular blind step",
+            # "Circular blind step",
+            # "Rectangular blind step",
+            # "Round",
+            # "Stock",
             # ]
             self._label_names = [  # 类别缩减后的类别名称列表
                 "other",
@@ -64,32 +68,32 @@ class MFCAD2Dataset(Dataset):
     def label_mapping(self) -> dict[int, int]:
         """返回原始标签到训练标签的映射。"""
         # mapping = {
-        #     0: 0,  
-        #     1: 1,  
-        #     2: 0,  
-        #     3: 0, 
-        #     4: 0,  
-        #     5: 2,  
-        #     6: 2, 
-        #     7: 2,  
-        #     8: 0,  
-        #     9: 0,  
-        #     10: 0,  
-        #     11: 0, 
-        #     12: 1,  
-        #     13: 0, 
-        #     14: 0,  
-        #     15: 0,  
-        #     16: 0,  
-        #     17: 2,  
-        #     18: 2,  
-        #     19: 2,  
-        #     20: 0,  
-        #     21: 0,  
-        #     22: 0,  
-        #     23: 0,  
+        #     0: 0,
+        #     1: 1,
+        #     2: 0,
+        #     3: 0,
+        #     4: 0,
+        #     5: 2,
+        #     6: 2,
+        #     7: 2,
+        #     8: 0,
+        #     9: 0,
+        #     10: 0,
+        #     11: 0,
+        #     12: 1,
+        #     13: 0,
+        #     14: 0,
+        #     15: 0,
+        #     16: 0,
+        #     17: 2,
+        #     18: 2,
+        #     19: 2,
+        #     20: 0,
+        #     21: 0,
+        #     22: 0,
+        #     23: 0,
         # }
-        
+
         # 9类别映射
         # mapping = {
         #     0: 0,   # other -> other
@@ -120,14 +124,43 @@ class MFCAD2Dataset(Dataset):
         # }
         # 9类别查找表（注释掉）
         # self.lut = np.asarray([0, 1, 0, 0, 0, 3, 4, 5, 0, 0, 0, 0, 2, 0, 0, 0, 0, 6, 7, 8, 0, 0, 0, 0, 0, 0], dtype=np.int32)
-        
+
         if not hasattr(self, "lut"):
             # 根据映射关系创建查找表
             # 映射规则：0:other, 1:hole, 2:slot
-            self.lut = np.asarray([0, 1, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0], dtype=np.int32)
+            self.lut = np.asarray(
+                [
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    2,
+                    2,
+                    2,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    2,
+                    2,
+                    2,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ],
+                dtype=np.int32,
+            )
 
         return self.lut  # 返回常量中的标签映射字典
-
 
     def __init__(
         self,
@@ -144,7 +177,7 @@ class MFCAD2Dataset(Dataset):
     ):
         """
         初始化MFCAD2数据集
-        
+
         Args:
             root_dir (str): 数据集根路径
             graphs (list, optional): 图数据列表
@@ -179,12 +212,14 @@ class MFCAD2Dataset(Dataset):
 
         # 1. 扫描所有图结构数据文件，已经分割后的
         #  - self.filenames: 存储所有找到的JSON文件的完整路径列表，如 [Path("E:/AAGnetV2/MFCAD2/aag/1.json"), ...]
-        self.filenames = list((root_dir / "aag").rglob("*.json"))  
+        self.filenames = list((root_dir / "aag").rglob("*.json"))
         print(">>> Done scanning {} files".format(len(self.filenames)))
 
         # 2. 如果需要标准化，加载统计信息
         if self.normalize:
-            print(f"Normalize is True, trying to load stat file from {root_dir.joinpath('aag/attr_stat.json')}")
+            print(
+                f"Normalize is True, trying to load stat file from {root_dir.joinpath('aag/attr_stat.json')}"
+            )
             self.stat = load_statistics(
                 stat_path=root_dir.joinpath("aag/attr_stat.json")
             )
@@ -229,14 +264,13 @@ class MFCAD2Dataset(Dataset):
         )
         print(f">>> Filtered {len(self.filenames)} files for split '{split}'.")
 
-
     def _collate(self, batch):
         """
         将一批数据样本合并为一个批次
-        
+
         Args:
             batch (List[dict]): 数据样本列表
-            
+
         Returns:
             dict: 合并后的批次数据
         """
@@ -247,11 +281,11 @@ class MFCAD2Dataset(Dataset):
     def load_one_graph(self, fn, data):
         """
         加载单个图数据
-        
+
         Args:
             fn (str): 文件名
             data (dict): 文件数据
-            
+
         Returns:
             dict: 加载的图数据
         """
@@ -261,11 +295,13 @@ class MFCAD2Dataset(Dataset):
         label_file = self.root_dir.joinpath("labels").joinpath(fn + ".json")
         with open(str(label_file), "r") as read_file:
             labels_data = json.load(read_file)
-        
+
         labels_np = np.asarray(
             labels_data, dtype=np.int32
         )  # 转为 int32 的 numpy 数组（更省内存）
-        labels_np = self.label_mapping()[labels_np]  # NOTE `如果使用6类，注释掉这行` 
+        labels_np = self.label_mapping()[
+            labels_np
+        ]  # NOTE `如果使用6类，注释掉这行`
 
         sample["graph"].ndata["y"] = torch.tensor(labels_np).long()
 
@@ -277,10 +313,10 @@ class MFCAD2Dataset(Dataset):
     def __getitem__(self, idx):
         """
         获取指定索引的数据样本
-        
+
         Args:
             idx (int): 样本索引
-            
+
         Returns:
             dict: 数据样本
         """
@@ -289,7 +325,7 @@ class MFCAD2Dataset(Dataset):
         # 读取json文件的内容：["0-0-0-0-0-23",{"graph":{"edges":[[0,0,0,0,0,0
         with open(filename, "r") as read_file:
             item = json.load(read_file)
-            fn, data = item   # 文件id和数据值
+            fn, data = item  # 文件id和数据值
 
         one_graph = self.load_one_graph(fn=fn, data=data)
 
@@ -384,6 +420,7 @@ class MFCAD2DataModule(L.LightningDataModule):
         self.ds_test = None
         self.use_3category = use_3category
         self.use_9category = use_9category
+
     def setup(self, stage: str = None):
         """
         根据不同阶段(stage)初始化数据集。
@@ -432,8 +469,6 @@ class MFCAD2DataModule(L.LightningDataModule):
             )
         else:
             raise NotImplementedError("仅支持训练/验证阶段的数据加载。")
-        
-        
 
     @staticmethod
     def _collate(batch):
@@ -524,13 +559,13 @@ class MFCAD2DataModule(L.LightningDataModule):
 #         normalize=False,
 #         center_and_scale=True,
 #     )
-    
+
 #     # 必须先调用setup()方法初始化数据集
 #     data_module.setup(stage="fit")
-    
+
 #     # 获取训练数据加载器
 #     train_loader = data_module.train_dataloader()
-    
+
 #     # 迭代一个批次
 #     for batch in train_loader:
 #         print("Batch graph nodes:", batch["graph"].num_nodes())
