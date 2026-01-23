@@ -1,0 +1,80 @@
+# seed: 42
+seed_everything: 42
+
+trainer:
+  max_epochs: 200
+  accelerator: gpu
+  enable_checkpointing: true
+  log_every_n_steps: 50
+  deterministic: true
+  num_sanity_val_steps: 0
+  # limit_train_batches: 5
+  # limit_val_batches: 5
+  # limit_test_batches: 5
+  logger:
+    class_path: swanlab.integration.pytorch_lightning.SwanLabLogger
+    init_args:
+      project: AAGNet_PL
+      # logdir: D:\510431\code\aagnet\v2\output\swanlog
+      logdir: E:\AAGnetV2\aagnet\v2\output\swanlog
+  callbacks:
+    - class_path: v2.callbacks.EMA.EMACallback
+      init_args:
+        decay: 0.9516951530106196 # 0.5 ** (1 / 14)
+
+    - class_path: lightning.pytorch.callbacks.StochasticWeightAveraging
+      init_args:
+        swa_epoch_start: 10
+        swa_lrs: 0.01
+
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_seg_acc_avg
+        mode: max
+        save_top_k: 1
+        #dirpath: D:\510431\code\aagnet\v2\output\checkpoints
+        dirpath: E:\AAGnetV2\aagnet\v2\output\checkpoints
+        filename: "{epoch}-{val_seg_acc_avg:.2f}"
+        save_last: true
+
+model:
+  num_classes: 3                 
+  arch: AAGNetGraphEncoder
+  edge_attr_dim: 12
+  node_attr_dim: 10
+  edge_attr_emb: 64
+  node_attr_emb: 64
+  edge_grid_dim: 0
+  node_grid_dim: 7
+  edge_grid_emb: 0
+  node_grid_emb: 64
+  num_layers: 3
+  delta: 2
+  mlp_ratio: 2
+  drop: 0.25
+  drop_path: 0.25
+  head_hidden_dim: 64
+  conv_on_edge: false
+  use_uv_gird: true
+  use_edge_attr: true
+  use_face_attr: true
+  lr: 1e-2
+  weight_decay: 1e-2
+  n_epochs: 200
+  # use_class_weight: false
+  # class_samples: None
+
+data:
+  # root_dir: D:\510431\code\aagnet\MFCAD2
+  root_dir: C:\Data\MFCAD2
+  normalize: False
+  center_and_scale: False
+  random_rotate: False
+  transform: null
+  batch_size: 32
+  shuffle: False # TODO need to be deleted in datamodule
+  drop_last: False
+  num_workers: 2
+  prefetch_factor: 4
+  # use_3category: False
+  # use_9category: True

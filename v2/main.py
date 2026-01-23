@@ -3,7 +3,9 @@
 import os  # 标准库：路径处理（abspath/join/dirname 等）
 import sys  # 标准库：运行时模块搜索路径 sys.path
 
-from lightning.pytorch.cli import LightningCLI  # Lightning：命令行训练/测试入口封装
+from lightning.pytorch.cli import (
+    LightningCLI,
+)  # Lightning：命令行训练/测试入口封装
 
 # v2 位于子目录：直接运行 `python v2/train.py ...` 时，可能找不到 `v2.*` 模块。
 # 这里将项目根目录（本文件父目录）加入 sys.path，保证导入稳定。
@@ -16,9 +18,16 @@ project_root = os.path.abspath(  # 项目根目录绝对路径
 if project_root not in sys.path:  # 避免重复追加
     sys.path.append(project_root)  # 追加到尾部：降低覆盖环境同名包的风险
 
-from v2.models.segmentors import AAGNetSegmentor  # 项目代码：模型（LightningModule/封装）
-from v2.dataset.SFdatamodule import SFDataModule  # 项目代码：数据模块（LightningDataModule）
-from v2.dataset.MFCAD2datamodule import MFCAD2DataModule  # 项目代码：数据模块（LightningDataModule）
+from v2.models.segmentors import (
+    AAGNetSegmentor,
+)  # 项目代码：模型（LightningModule/封装）
+from v2.dataset.SFdatamodule import (
+    SFDataModule,
+)  # 项目代码：数据模块（LightningDataModule）
+
+from v2.dataset.MFCAD2datamodule import (
+    MFCAD2DataModule,
+)  # 项目代码：数据模块（LightningDataModule）
 
 
 class AAGNetCLI(LightningCLI):
@@ -35,7 +44,7 @@ class AAGNetCLI(LightningCLI):
 if __name__ == "__main__":
     _cli = AAGNetCLI(  # 初始化 CLI：构造函数会解析参数并执行 fit/test/predict/validate 等流程
         model_class=AAGNetSegmentor,  # 模型类
-        datamodule_class=MFCAD2DataModule,  # 数据模块类
+        # datamodule_class=MFCAD2DataModule,  # 数据模块类 # NOTE 此处不再硬编码数据集，只需要在CLI启动时额外增加一个'--data [DataModule类名]'即可指定对应的数据集，例如python v2/main.py fit --data SFDataModule -c v2/configs/sf_csy.yaml
         save_config_kwargs={  # 配置保存相关参数
             "overwrite": True,  # 覆盖同名 config.yaml：规避 LightningCLI 已知问题（https://github.com/Lightning-AI/pytorch-lightning/issues/17168）
         },
