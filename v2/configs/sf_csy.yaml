@@ -69,3 +69,7 @@ data:
   drop_last: False
   num_workers: 2
   prefetch_factor: 4
+  label_names:
+    - other
+    - slot groove
+    - hole
