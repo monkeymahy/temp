@@ -407,7 +407,7 @@ class App(QDialog):  # 主界面
         print(f"总耗时: {time.time() - start_time:.3f}s")  # 输出总耗时
 
     def _class_name(self, class_idx: int) -> str:
-        default_label_names = ["other", "slot groove", "hole"]  # 默认类别名顺序
+        default_label_names = ["other", "hole", "slot groove"]  # 默认类别名顺序
         label_names = self.label_names  # or default_label_names  # 优先使用配置中的类别名
         if 0 <= class_idx < len(label_names):  # 索引有效
             return f"class_{class_idx} {label_names[class_idx]}"  # class后追加类别名

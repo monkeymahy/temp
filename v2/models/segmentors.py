@@ -358,7 +358,7 @@ class AAGNetSegmentor(L.LightningModule):
             "tra_seg_acc_avg": self.tra_seg_acc,  # 平均准确率
             "tra_seg_iou_avg": self.tra_seg_iou,  # 平均IOU
         }
-        LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names()
+        LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
@@ -407,7 +407,7 @@ class AAGNetSegmentor(L.LightningModule):
             "val_seg_acc_avg": self.val_seg_acc,  # 平均准确率
             "val_seg_iou_avg": self.val_seg_iou,  # 平均IOU
         }
-        LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names()
+        LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
@@ -454,7 +454,7 @@ class AAGNetSegmentor(L.LightningModule):
             "tst_seg_acc_avg": self.tst_seg_acc,  # 平均准确率
             "tst_seg_iou_avg": self.tst_seg_iou,  # 平均IOU
         }
-        LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names()
+        LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou

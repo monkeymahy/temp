@@ -1,4 +1,3 @@
-# seed: 42
 seed_everything: 42
 
 trainer:
@@ -15,8 +14,7 @@ trainer:
     class_path: swanlab.integration.pytorch_lightning.SwanLabLogger
     init_args:
       project: AAGNet_PL
-      # logdir: D:\510431\code\aagnet\v2\output\swanlog
-      logdir: E:\AAGnetV2\aagnet\v2\output\swanlog
+      logdir: D:\Projects\AAGNet\output\swanlog
   callbacks:
     - class_path: v2.callbacks.EMA.EMACallback
       init_args:
@@ -32,13 +30,12 @@ trainer:
         monitor: val_seg_acc_avg
         mode: max
         save_top_k: 1
-        #dirpath: D:\510431\code\aagnet\v2\output\checkpoints
-        dirpath: E:\AAGnetV2\aagnet\v2\output\checkpoints
+        dirpath: D:\Projects\AAGNet\output\checkpoints
         filename: "{epoch}-{val_seg_acc_avg:.2f}"
         save_last: true
 
 model:
-  num_classes: 3                 
+  num_classes: 3
   arch: AAGNetGraphEncoder
   edge_attr_dim: 12
   node_attr_dim: 10
@@ -61,23 +58,17 @@ model:
   lr: 1e-2
   weight_decay: 1e-2
   n_epochs: 200
-  # use_class_weight: false
-  # class_samples: None
 
 data:
-  # root_dir: D:\510431\code\aagnet\MFCAD2
   root_dir: C:\Data\MFCAD2
   normalize: False
   center_and_scale: False
   random_rotate: False
   transform: null
   batch_size: 32
-  shuffle: False # TODO need to be deleted in datamodule
   drop_last: False
   num_workers: 2
   prefetch_factor: 4
-  # use_3category: False
-  # use_9category: True
   label_names:
     - other
     - hole

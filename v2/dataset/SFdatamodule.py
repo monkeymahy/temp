@@ -20,6 +20,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         drop_last=False,  # 是否丢弃最后不满批
         num_workers=4,  # 数据加载线程数
         prefetch_factor=4,  # 预取批次数
+        label_names=None,  # 类别名称列表
     ):
         """初始化SF数据模块。"""  # 简要说明
         # 参数校验，确保健壮性
@@ -28,6 +29,11 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         assert isinstance(center_and_scale, bool)  # center_and_scale必须是bool
         assert isinstance(random_rotate, bool)  # random_rotate必须是bool
         assert callable(transform) or transform is None  # transform需可调用或为空
+        assert isinstance(batch_size, int) and batch_size > 0  # batch_size正整数
+        assert isinstance(drop_last, bool)  # drop_last必须是bool
+        assert isinstance(num_workers, int) and num_workers >= 0  # num_workers非负整数
+        assert isinstance(prefetch_factor, int) and prefetch_factor > 0  # prefetch_factor正整数
+        assert isinstance(label_names, list)  # label_names列表类型校验
 
         super().__init__()  # 初始化父类
 
@@ -43,6 +49,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         self.persistent_workers = self.num_workers > 0  # 多进程持久化开关
         self.prefetch_factor = prefetch_factor  # 预取批次数
         self.pin_memory = True if torch.cuda.is_available() else False  # CUDA时启用pin_memory
+        self.label_names = label_names  # 类别名称列表
 
     def setup(self, stage: str = None):  # 按阶段构建数据集
         """根据stage初始化数据集。"""  # 简要说明
@@ -58,6 +65,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
                 center_and_scale=self.center_and_scale,  # 居中缩放开关
                 random_rotate=self.random_rotate,  # 随机旋转开关
                 transform=self.transform,  # 变换函数
+                label_names=self.label_names,  # 类别名称列表
             )
             # 验证集
             self.ds_valid = SFDataset(  # 创建验证集
@@ -67,6 +75,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
                 center_and_scale=self.center_and_scale,  # 居中缩放开关
                 random_rotate=self.random_rotate,  # 随机旋转开关
                 transform=self.transform,  # 变换函数
+                label_names=self.label_names,  # 类别名称列表
             )
         elif stage == "test":  # 测试阶段
             self.ds_test = SFDataset(  # 创建测试集
@@ -76,6 +85,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
                 center_and_scale=self.center_and_scale,  # 居中缩放开关
                 random_rotate=self.random_rotate,  # 随机旋转开关
                 transform=self.transform,  # 变换函数
+                label_names=self.label_names,  # 类别名称列表
             )
         else:  # 非法stage
             raise NotImplementedError("仅支持训练/验证阶段的数据加载。")  # 明确错误

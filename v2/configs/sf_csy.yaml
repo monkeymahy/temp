@@ -71,5 +71,5 @@ data:
   prefetch_factor: 4
   label_names:
     - other
-    - slot groove
     - hole
+    - slot groove
