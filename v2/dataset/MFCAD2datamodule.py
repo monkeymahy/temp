@@ -27,43 +27,43 @@ class MFCAD2Dataset(Dataset):
     原始的MFCAD2数据集类，用于加载和处理MFCAD2数据集
     """
 
-    def label_names(self) -> list[str]:
-        """返回分类类别名称列表。"""
+    # def label_names(self) -> list[str]:
+    #     """返回分类类别名称列表。"""
 
-        if not hasattr(self, "_label_names"):
-            # self._label_names = [  # 原始类别名称列表
-            # "Chamfer",
-            # "Through hole",
-            # "Triangular passage",
-            # "Rectangular passage",
-            # "6-sided passage",
-            # "Triangular through slot",
-            # "Rectangular through slot",
-            # "Circular through slot",
-            # "Rectangular through step",
-            # "2-sided through step",
-            # "Slanted through step",
-            # "O-ring",
-            # "Blind hole",
-            # "Triangular pocket",
-            # "Rectangular pocket",
-            # "6-sided pocket",
-            # "Circular end pocket",
-            # "Rectangular blind slot",
-            # "Vertical circular end blind slot",
-            # "Horizontal circular end blind slot",
-            # "Triangular blind step",
-            # "Circular blind step",
-            # "Rectangular blind step",
-            # "Round",
-            # "Stock",
-            # ]
-            self._label_names = [  # 类别缩减后的类别名称列表
-                "other",
-                "hole",
-                "slot",
-            ]
-        return self._label_names  # 返回常量中的类别名称列表
+    #     if not hasattr(self, "_label_names"):
+    #         # self._label_names = [  # 原始类别名称列表
+    #         # "Chamfer",
+    #         # "Through hole",
+    #         # "Triangular passage",
+    #         # "Rectangular passage",
+    #         # "6-sided passage",
+    #         # "Triangular through slot",
+    #         # "Rectangular through slot",
+    #         # "Circular through slot",
+    #         # "Rectangular through step",
+    #         # "2-sided through step",
+    #         # "Slanted through step",
+    #         # "O-ring",
+    #         # "Blind hole",
+    #         # "Triangular pocket",
+    #         # "Rectangular pocket",
+    #         # "6-sided pocket",
+    #         # "Circular end pocket",
+    #         # "Rectangular blind slot",
+    #         # "Vertical circular end blind slot",
+    #         # "Horizontal circular end blind slot",
+    #         # "Triangular blind step",
+    #         # "Circular blind step",
+    #         # "Rectangular blind step",
+    #         # "Round",
+    #         # "Stock",
+    #         # ]
+    #         self._label_names = [  # 类别缩减后的类别名称列表
+    #             "other",
+    #             "hole",
+    #             "slot",
+    #         ]
+    #     return self._label_names  # 返回常量中的类别名称列表
 
     def label_mapping(self) -> dict[int, int]:
         """返回原始标签到训练标签的映射。"""
@@ -174,6 +174,7 @@ class MFCAD2Dataset(Dataset):
         transform=None,
         use_3category=False,
         use_9category=False,
+        label_names=None,
     ):
         """
         初始化MFCAD2数据集
@@ -196,6 +197,9 @@ class MFCAD2Dataset(Dataset):
         assert isinstance(random_rotate, bool)
         assert isinstance(num_train_data, int) and num_train_data >= -1
         assert callable(transform) or transform is None
+        assert isinstance(use_3category, bool)
+        assert isinstance(use_9category, bool)
+        assert isinstance(label_names, list)
 
         self.root_dir = root_dir
         self.graphs = graphs
@@ -209,6 +213,7 @@ class MFCAD2Dataset(Dataset):
         self.root_dir = root_dir
         self.use_3category = use_3category
         self.use_9category = use_9category
+        self.label_names = label_names
 
         # 1. 扫描所有图结构数据文件，已经分割后的
         #  - self.filenames: 存储所有找到的JSON文件的完整路径列表，如 [Path("E:/AAGnetV2/MFCAD2/aag/1.json"), ...]
@@ -217,12 +222,8 @@ class MFCAD2Dataset(Dataset):
 
         # 2. 如果需要标准化，加载统计信息
         if self.normalize:
-            print(
-                f"Normalize is True, trying to load stat file from {root_dir.joinpath('aag/attr_stat.json')}"
-            )
-            self.stat = load_statistics(
-                stat_path=root_dir.joinpath("aag/attr_stat.json")
-            )
+            print(f"Normalize is True, trying to load stat file from {root_dir.joinpath('aag/attr_stat.json')}")
+            self.stat = load_statistics(stat_path=root_dir.joinpath("aag/attr_stat.json"))
         else:
             print("Normalize is False, skipping loading stat file")
 
@@ -296,12 +297,8 @@ class MFCAD2Dataset(Dataset):
         with open(str(label_file), "r") as read_file:
             labels_data = json.load(read_file)
 
-        labels_np = np.asarray(
-            labels_data, dtype=np.int32
-        )  # 转为 int32 的 numpy 数组（更省内存）
-        labels_np = self.label_mapping()[
-            labels_np
-        ]  # NOTE `如果使用6类，注释掉这行`
+        labels_np = np.asarray(labels_data, dtype=np.int32)  # 转为 int32 的 numpy 数组（更省内存）
+        labels_np = self.label_mapping()[labels_np]  # NOTE `如果使用6类，注释掉这行`
 
         sample["graph"].ndata["y"] = torch.tensor(labels_np).long()
 
@@ -341,13 +338,9 @@ class MFCAD2Dataset(Dataset):
 
         if self.random_rotate:  # 未激活
             rotation = get_random_rotation()
-            one_graph["graph"].ndata["grid"] = rotate_uvgrid(
-                one_graph["graph"].ndata["grid"], rotation
-            )
+            one_graph["graph"].ndata["grid"] = rotate_uvgrid(one_graph["graph"].ndata["grid"], rotation)
             if "grid" in one_graph["graph"].edata.keys():
-                one_graph["graph"].edata["grid"] = rotate_uvgrid(
-                    one_graph["graph"].edata["grid"], rotation
-                )
+                one_graph["graph"].edata["grid"] = rotate_uvgrid(one_graph["graph"].edata["grid"], rotation)
         if self.transform:  # None
             one_graph["graph"] = self.transform(one_graph["graph"])
 
@@ -374,6 +367,7 @@ class MFCAD2DataModule(L.LightningDataModule):
         prefetch_factor=4,
         use_3category=False,
         use_9category=False,
+        label_names=None,
     ):
         """
         初始化MFCAD2数据模块。
@@ -398,6 +392,13 @@ class MFCAD2DataModule(L.LightningDataModule):
         assert isinstance(random_rotate, bool)
         assert callable(transform) or transform is None
         assert isinstance(num_train_data, int) and num_train_data >= -1
+        assert isinstance(shuffle, bool)
+        assert isinstance(drop_last, bool)
+        assert isinstance(num_workers, int) and num_workers >= 0
+        assert isinstance(prefetch_factor, int) and prefetch_factor > 0
+        assert isinstance(use_3category, bool)
+        assert isinstance(use_9category, bool)
+        assert isinstance(label_names, list)
 
         super().__init__()
 
@@ -420,6 +421,7 @@ class MFCAD2DataModule(L.LightningDataModule):
         self.ds_test = None
         self.use_3category = use_3category
         self.use_9category = use_9category
+        self.label_names = label_names
 
     def setup(self, stage: str = None):
         """
@@ -443,6 +445,7 @@ class MFCAD2DataModule(L.LightningDataModule):
                 transform=self.transform,
                 use_3category=self.use_3category,
                 use_9category=self.use_9category,
+                label_names=self.label_names,
             )
             # [:5]
             # 验证集
@@ -455,6 +458,7 @@ class MFCAD2DataModule(L.LightningDataModule):
                 transform=self.transform,
                 use_3category=self.use_3category,
                 use_9category=self.use_9category,
+                label_names=self.label_names,
             )
         elif stage == "test":
             self.ds_test = MFCAD2Dataset(
@@ -466,6 +470,7 @@ class MFCAD2DataModule(L.LightningDataModule):
                 transform=self.transform,
                 use_3category=self.use_3category,
                 use_9category=self.use_9category,
+                label_names=self.label_names,
             )
         else:
             raise NotImplementedError("仅支持训练/验证阶段的数据加载。")
