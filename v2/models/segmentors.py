@@ -1,10 +1,7 @@
 import torch
 from torch import nn
 import lightning.pytorch as L
-from torchmetrics.classification import (
-    MulticlassAccuracy,
-    MulticlassJaccardIndex,
-)
+from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
 
 import models.encoders as encoders
 from .layers import MLP
@@ -20,14 +17,14 @@ class AAGNetSegmentor(L.LightningModule):
     """
     AAG-Net solid face segmentation model
     基于 Attributed Adjacency Graph (AAG) 的实体面分割模型，用于 B-rep 数据的面分类任务
-    
+
     模型结构：
     1. 节点(面)属性编码器：将输入的面属性映射到嵌入空间
     2. 节点(面)网格编码器：处理2D UV网格特征
     3. 边属性编码器：将输入的边属性映射到嵌入空间
     4. 图编码器：通过消息传递计算节点(面)嵌入和全局图嵌入
     5. 分割头：将节点嵌入映射到分类概率
-    
+
     训练流程：
     1. 前向传播：计算每个面的分类logits
     2. 损失计算：使用交叉熵损失函数
@@ -63,7 +60,7 @@ class AAGNetSegmentor(L.LightningModule):
     ):
         """
         Initialize the AAG-Net solid face segmentation model
-        
+
         Args:
             num_classes (int): 每个面要输出的类别数量
             arch (str): 图编码器的架构名称
@@ -97,7 +94,7 @@ class AAGNetSegmentor(L.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.n_epochs = n_epochs
-        
+
         # 损失函数：使用交叉熵损失函数
         # 适用于多分类任务，自动处理类别不平衡问题
         self.seg_loss = nn.CrossEntropyLoss()
@@ -156,18 +153,18 @@ class AAGNetSegmentor(L.LightningModule):
             nn.Linear(edge_attr_dim, edge_attr_emb),  # 线性变换到嵌入维度
             nn.LayerNorm(edge_attr_emb),  # 层归一化
         )
-        
+
         # 边网格编码器：处理1D UV网格特征（预留功能，尚未实现）
         if edge_grid_dim:
             # TODO: 实现边网格编码器
             pass
-        
+
         # 计算最终的节点和边嵌入维度
         # 节点嵌入 = 属性嵌入 + 网格嵌入
         node_emb = node_attr_emb + node_grid_emb
         # 边嵌入 = 属性嵌入 + 网格嵌入
         edge_emb = edge_attr_emb + edge_grid_emb
-        
+
         # 图编码器：基于指定架构初始化图神经网络
         # 通过动态获取编码器类，实现不同图编码器的灵活切换
         encoder = getattr(encoders, arch)  # 动态获取编码器类
@@ -181,11 +178,11 @@ class AAGNetSegmentor(L.LightningModule):
             drop_path=drop_path,  # DropPath率
             conv_on_edge=conv_on_edge,  # 是否在边上执行卷积
         )
-        
+
         # 计算最终输出嵌入维度（节点嵌入 + 全局图嵌入）
         # 将全局图嵌入与每个节点的局部嵌入拼接，提供更丰富的上下文信息
         final_out_emb = 2 * node_emb
-        
+
         # 分割头：将节点嵌入映射到分类概率
         # 使用多层感知机(MLP)实现，包含隐藏层和输出层
         self.seg_head = MLP(
@@ -205,7 +202,7 @@ class AAGNetSegmentor(L.LightningModule):
         """
         初始化各类评估指标
         为训练集、验证集和测试集分别初始化准确率和IOU指标
-        
+
         Args:
             num_classes (int): 类别数量，用于初始化多分类评估指标
         """
@@ -266,13 +263,13 @@ class AAGNetSegmentor(L.LightningModule):
     def forward(self, batched_graph):
         """
         Forward pass 前向传播
-        
+
         Args:
             batched_graph (dgl.Graph): 批量DGL图数据，其中包含：
                 - 节点特征 (ndata['x']): 面属性
                 - 节点网格 (ndata['grid']): 面的2D UV网格
                 - 边特征 (edata['x']): 边属性
-        
+
         Returns:
             torch.tensor: 每个面的分类logits (total_nodes_in_batch x num_classes)
         """
@@ -295,7 +292,7 @@ class AAGNetSegmentor(L.LightningModule):
             if self.use_edge_attr
             else torch.zeros_like(batched_graph.edata["x"])  # 如果不使用边属性，则置为0
         )
-        
+
         # 计算节点(面)隐藏特征
         # 通过属性编码器处理面属性
         node_feat = self.node_attr_encoder(input_node_attr)
@@ -304,26 +301,20 @@ class AAGNetSegmentor(L.LightningModule):
             assert input_node_grid.numel() > 0, "输入网格特征不能为空"
             node_grid_feat = self.node_grid_encoder(input_node_grid)
             node_feat = torch.concat([node_feat, node_grid_feat], dim=1)  # 拼接属性特征和网格特征
-        
+
         # 计算边隐藏特征
         # 通过边属性编码器处理边属性
         edge_feat = self.edge_attr_encoder(input_edge_attr)
         # Message pass and compute per-face(node) and global embeddings
-        node_emb, graph_emb = self.graph_encoder(
-            batched_graph, node_feat, edge_feat
-        )
+        node_emb, graph_emb = self.graph_encoder(batched_graph, node_feat, edge_feat)
         # concatenated to the per-node embeddings
-        num_nodes_per_graph = batched_graph.batch_num_nodes().to(
-            graph_emb.device
-        )
-        graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(
-            graph_emb.device
-        )
-        
+        num_nodes_per_graph = batched_graph.batch_num_nodes().to(graph_emb.device)
+        graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(graph_emb.device)
+
         # 拼接局部节点嵌入和全局图嵌入
         # 结合局部特征和全局上下文，提高分类性能
         local_global_feat = torch.cat((node_emb, graph_emb), dim=1)
-        
+
         # 映射到分类logits
         # 通过分割头将嵌入向量映射到类别概率
         seg_out = self.seg_head(local_global_feat)
@@ -337,11 +328,11 @@ class AAGNetSegmentor(L.LightningModule):
     ):
         """
         训练步骤
-        
+
         Args:
             batch (dict): 包含图数据的批次
             batch_idx (int): 批次索引
-            
+
         Returns:
             torch.tensor: 损失值
         """
@@ -351,7 +342,7 @@ class AAGNetSegmentor(L.LightningModule):
 
         # 前向传播获取预测结果
         seg_pred = self.forward(batched_graph=graphs)
-        
+
         # 计算损失
         loss = self.seg_loss(seg_pred, seg_label)
 
@@ -368,9 +359,7 @@ class AAGNetSegmentor(L.LightningModule):
             "tra_seg_iou_avg": self.tra_seg_iou,  # 平均IOU
         }
         LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names()
-        for i, (_acc, _iou) in enumerate(
-            zip(seg_acc_per_class, seg_iou_per_class)
-        ):
+        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
@@ -379,9 +368,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic,
             on_step=False,
             on_epoch=True,
-            batch_size=seg_label.shape[
-                0
-            ],  # TODO 此处并非batch size，后续需要注意
+            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
         )
 
         return loss
@@ -393,7 +380,7 @@ class AAGNetSegmentor(L.LightningModule):
     ):
         """
         验证步骤
-        
+
         Args:
             batch (dict): 包含图数据的批次
             batch_idx (int): 批次索引
@@ -404,7 +391,7 @@ class AAGNetSegmentor(L.LightningModule):
 
         # 前向传播获取预测结果
         seg_pred = self.forward(batched_graph=graphs)
-        
+
         # 计算损失
         loss = self.seg_loss(seg_pred, seg_label)
 
@@ -421,9 +408,7 @@ class AAGNetSegmentor(L.LightningModule):
             "val_seg_iou_avg": self.val_seg_iou,  # 平均IOU
         }
         LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names()
-        for i, (_acc, _iou) in enumerate(
-            zip(seg_acc_per_class, seg_iou_per_class)
-        ):
+        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
@@ -432,9 +417,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic,
             on_step=False,
             on_epoch=True,
-            batch_size=seg_label.shape[
-                0
-            ],  # TODO 此处并非batch size，后续需要注意
+            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
         )
 
     def test_step(
@@ -444,7 +427,7 @@ class AAGNetSegmentor(L.LightningModule):
     ):
         """
         测试步骤
-        
+
         Args:
             batch (dict): 包含图数据的批次
             batch_idx (int): 批次索引
@@ -455,7 +438,7 @@ class AAGNetSegmentor(L.LightningModule):
 
         # 前向传播获取预测结果
         seg_pred = self.forward(batched_graph=graphs)
-        
+
         # 计算损失
         loss = self.seg_loss(seg_pred, seg_label)
 
@@ -472,9 +455,7 @@ class AAGNetSegmentor(L.LightningModule):
             "tst_seg_iou_avg": self.tst_seg_iou,  # 平均IOU
         }
         LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names()
-        for i, (_acc, _iou) in enumerate(
-            zip(seg_acc_per_class, seg_iou_per_class)
-        ):
+        for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
             _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
@@ -483,15 +464,13 @@ class AAGNetSegmentor(L.LightningModule):
             _dic,
             on_step=False,
             on_epoch=True,
-            batch_size=seg_label.shape[
-                0
-            ],  # TODO 此处并非batch size，后续需要注意
+            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
         )
 
     def configure_optimizers(self):
         """
         配置优化器和学习率调度器
-        
+
         Returns:
             tuple: (优化器列表, 学习率调度器列表)
         """
