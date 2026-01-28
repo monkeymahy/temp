@@ -308,8 +308,8 @@ class AAGNetSegmentor(L.LightningModule):
         # Message pass and compute per-face(node) and global embeddings
         node_emb, graph_emb = self.graph_encoder(batched_graph, node_feat, edge_feat)
         # concatenated to the per-node embeddings
-        num_nodes_per_graph = batched_graph.batch_num_nodes().to(graph_emb.device)
-        graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0).to(graph_emb.device)
+        num_nodes_per_graph = batched_graph.batch_num_nodes()
+        graph_emb = graph_emb.repeat_interleave(num_nodes_per_graph, dim=0)
 
         # 拼接局部节点嵌入和全局图嵌入
         # 结合局部特征和全局上下文，提高分类性能
@@ -364,12 +364,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic[f"tra_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         # 记录指标
-        self.log_dict(
-            _dic,
-            on_step=False,
-            on_epoch=True,
-            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
-        )
+        self.log_dict(_dic, on_step=False, on_epoch=True, batch_size=seg_label.numel())
 
         return loss
 
@@ -413,12 +408,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic[f"val_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         # 记录指标
-        self.log_dict(
-            _dic,
-            on_step=False,
-            on_epoch=True,
-            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
-        )
+        self.log_dict(_dic, on_step=False, on_epoch=True, batch_size=seg_label.numel())
 
     def test_step(
         self,
@@ -460,12 +450,7 @@ class AAGNetSegmentor(L.LightningModule):
             _dic[f"tst_seg_iou{i}({LABEL_NAMES[i]})"] = _iou
 
         # 记录指标
-        self.log_dict(
-            _dic,
-            on_step=False,
-            on_epoch=True,
-            batch_size=seg_label.shape[0],  # TODO 此处并非batch size，后续需要注意
-        )
+        self.log_dict(_dic, on_step=False, on_epoch=True, batch_size=seg_label.numel())
 
     def configure_optimizers(self):
         """
