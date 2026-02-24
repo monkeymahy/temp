@@ -12,6 +12,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
     def __init__(  # 初始化数据模块
         self,  # 实例本身
         root_dir,  # 数据集根目录
+        label_dir="labels",  # 标签目录（相对 root_dir）
         normalize=False,  # 是否标准化
         center_and_scale=False,  # 是否居中缩放
         random_rotate=False,  # 是否随机旋转
@@ -25,6 +26,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         """初始化SF数据模块。"""  # 简要说明
         # 参数校验，确保健壮性
         assert isinstance(root_dir, str)  # root_dir必须是字符串
+        assert isinstance(label_dir, str) and len(label_dir.strip()) > 0  # label_dir非空字符串
         assert isinstance(normalize, bool)  # normalize必须是bool
         assert isinstance(center_and_scale, bool)  # center_and_scale必须是bool
         assert isinstance(random_rotate, bool)  # random_rotate必须是bool
@@ -39,6 +41,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
 
         # 成员变量赋值
         self.root_dir = root_dir  # 数据根目录
+        self.label_dir = label_dir  # 标签目录（相对 root_dir）
         self.normalize = normalize  # 标准化开关
         self.center_and_scale = center_and_scale  # 居中缩放开关
         self.random_rotate = random_rotate  # 随机旋转开关
@@ -61,6 +64,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
             self.ds_train = SFDataset(  # 创建训练集
                 root_dir=self.root_dir,  # 数据根目录
                 split="train",  # 训练划分
+                label_dir=self.label_dir,  # 标签目录
                 normalize=self.normalize,  # 标准化开关
                 center_and_scale=self.center_and_scale,  # 居中缩放开关
                 random_rotate=self.random_rotate,  # 随机旋转开关
@@ -71,6 +75,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
             self.ds_valid = SFDataset(  # 创建验证集
                 root_dir=self.root_dir,  # 数据根目录
                 split="val",  # 验证划分
+                label_dir=self.label_dir,  # 标签目录
                 normalize=self.normalize,  # 标准化开关
                 center_and_scale=self.center_and_scale,  # 居中缩放开关
                 random_rotate=self.random_rotate,  # 随机旋转开关
@@ -81,6 +86,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
             self.ds_test = SFDataset(  # 创建测试集
                 root_dir=self.root_dir,  # 数据根目录
                 split="test",  # 测试划分
+                label_dir=self.label_dir,  # 标签目录
                 normalize=self.normalize,  # 标准化开关
                 center_and_scale=self.center_and_scale,  # 居中缩放开关
                 random_rotate=self.random_rotate,  # 随机旋转开关
