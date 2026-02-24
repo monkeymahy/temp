@@ -9,6 +9,16 @@ import json  # 读取 json 文件
 import os.path as osp  # 兼容性更好的路径判断（exists 等）
 
 
+def map_sf_labels(labels: Union[List[int], np.ndarray], lut: Optional[np.ndarray] = None) -> np.ndarray:
+    """将 SF 原始标签映射到训练标签空间，返回 np.int32 数组。"""
+    labels_np = np.asarray(labels, dtype=np.int32)
+    if lut is None:
+        lut = np.asarray([2, 0, 0, 1, 0, 0], dtype=np.int32)
+    else:
+        lut = np.asarray(lut, dtype=np.int32)
+    return lut[labels_np]
+
+
 def load_one_graph(fn: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """从单个样本的 json 数据构建 DGLGraph，并填充节点/边特征。"""
     # 读取边（DGL 需要 (src, dst) 两个序列或等价结构）

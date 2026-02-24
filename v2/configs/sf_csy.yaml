@@ -61,6 +61,7 @@ model:
 
 data:
   root_dir: C:\Data\SF-JSON
+  label_dir: labels_mapped
   normalize: False
   center_and_scale: False
   random_rotate: False
