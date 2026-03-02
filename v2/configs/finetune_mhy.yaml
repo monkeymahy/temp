@@ -1,0 +1,81 @@
+seed_everything: 42
+
+trainer:
+  max_epochs: 200
+  accelerator: gpu
+  enable_checkpointing: true
+  log_every_n_steps: 50
+  deterministic: true
+  num_sanity_val_steps: 0
+  logger:
+    class_path: swanlab.integration.pytorch_lightning.SwanLabLogger
+    init_args:
+      project: AAGNet_PL
+      logdir: .\v2\output\swanlog
+  callbacks:
+    - class_path: v2.callbacks.EMA.EMACallback
+      init_args:
+        decay: 0.9516951530106196
+
+    - class_path: lightning.pytorch.callbacks.StochasticWeightAveraging
+      init_args:
+        swa_epoch_start: 10
+        swa_lrs: 0.002
+
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_seg_acc_avg
+        mode: max
+        save_top_k: 1
+        dirpath: .\v2\output\checkpoints\target_finetune_24
+        filename: "{epoch}-{val_seg_acc_avg:.2f}"
+        save_last: true
+
+model:
+  num_classes: 6
+  arch: AAGNetGraphEncoder
+  edge_attr_dim: 12
+  node_attr_dim: 10
+  edge_attr_emb: 64
+  node_attr_emb: 64
+  edge_grid_dim: 0
+  node_grid_dim: 7
+  edge_grid_emb: 0
+  node_grid_emb: 64
+  num_layers: 3
+  delta: 2
+  mlp_ratio: 2
+  drop: 0.15
+  drop_path: 0.15
+  head_hidden_dim: 64
+  conv_on_edge: false
+  use_uv_gird: true
+  use_edge_attr: true
+  use_face_attr: true
+  lr: 5e-4
+  weight_decay: 5e-3
+  n_epochs: 200
+  pretrained_ckpt: .\v2\output\checkpoints\pretrain_24\epoch=33-val_seg_acc_avg=0.98.ckpt
+  freeze_encoder: true
+  unfreeze_at_epoch: 10
+  loss_type: ce
+  focal_gamma: 2.0
+  class_weights: null
+
+data:
+  root_dir: .\v2\data\SFCAD
+  normalize: False
+  center_and_scale: true
+  random_rotate: true
+  transform: null
+  batch_size: 32
+  drop_last: False
+  num_workers: 4
+  prefetch_factor: 4
+  label_names:
+    - slot groove
+    - pocket
+    - planar
+    - hole
+    - notch_chamfer
+    - other

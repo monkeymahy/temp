@@ -95,7 +95,7 @@ class App(QDialog):  # 主界面
         self.last_step_file: Optional[Path] = None  # 上次选择的STEP文件
         self.face_index_by_hash: Dict[int, int] = {}  # 面哈希到索引
         self.face_select_enabled = False  # 面选择开关
-        self.selected_face_idx: Optional[int] = None  # 当前选中面索引
+        self.selected_face_indices: List[int] = []  # 当前选中面索引列表
         self.current_gt_labels: Optional[List[int]] = None  # 当前GT标签
         self.current_pred_labels: Optional[List[int]] = None  # 当前预测标签
         self.gt_label_path: Optional[Path] = None  # 当前GT文件路径
@@ -449,6 +449,7 @@ class App(QDialog):  # 主界面
         face_layout.addWidget(self.face_list_label)  # 放置标题
 
         self.faceListWidget = QListWidget()  # 面列表
+        self.faceListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 允许Ctrl多选
         self.faceListWidget.itemClicked.connect(self.faceListItemClicked)  # 绑定点击事件
         self.faceListWidget.setContextMenuPolicy(Qt.CustomContextMenu)  # 启用自定义右键
         self.faceListWidget.customContextMenuRequested.connect(self.faceListContextMenu)  # 绑定右键菜单
@@ -616,7 +617,7 @@ class App(QDialog):  # 主界面
             self.gt_class_index_by_row.clear()  # 清空GT行映射
             self.pred_class_index_by_row.clear()  # 清空Prediction行映射
             self.face_index_by_hash.clear()  # 清空面哈希
-            self.selected_face_idx = None  # 清空选中面
+            self.selected_face_indices.clear()  # 清空选中面
             if hasattr(self, "faceListWidget"):
                 self.faceListWidget.clear()  # 清空面列表
             self.current_gt_labels = None  # 清空GT标签
@@ -960,20 +961,22 @@ class App(QDialog):  # 主界面
             self.faceListWidget.addItem(f"Face {idx}")
 
     def faceListItemClicked(self):
-        row = self.faceListWidget.currentRow()  # 获取选中行
-        if row < 0 or row >= len(self.faces_list):  # 越界保护
-            return
-        self.selected_face_idx = row  # 更新选中面
+        selected_rows = sorted({self.faceListWidget.row(item) for item in self.faceListWidget.selectedItems()})
+        self.selected_face_indices = [idx for idx in selected_rows if 0 <= idx < len(self.faces_list)]
         self._refresh_selection_colors()  # 刷新颜色
 
     def faceListContextMenu(self, pos):
         item = self.faceListWidget.itemAt(pos)  # 获取右键项
-        if item is None:
-            return
-        row = self.faceListWidget.row(item)  # 获取行
-        if row < 0 or row >= len(self.faces_list):
-            return
-        self.selected_face_idx = row  # 更新选中面
+        ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        if item is not None:
+            row = self.faceListWidget.row(item)  # 获取行
+            if 0 <= row < len(self.faces_list):
+                if row not in self.selected_face_indices and not ctrl_pressed:
+                    self.selected_face_indices = [row]
+                elif row not in self.selected_face_indices and ctrl_pressed:
+                    self.selected_face_indices.append(row)
+                self.selected_face_indices = sorted(set(self.selected_face_indices))
+                self._sync_face_list_selection_from_state()
         self._refresh_selection_colors()  # 刷新颜色
         global_pos = self.faceListWidget.mapToGlobal(pos)  # 转全局坐标
         self._show_face_edit_menu(global_pos)  # 右键菜单
@@ -989,15 +992,17 @@ class App(QDialog):  # 主界面
         else:  # 关闭
             self.gt_display.Context.Deactivate(self.gt_ais_shape)  # 关闭GT选择
             self.pred_display.Context.Deactivate(self.pred_ais_shape)  # 关闭Prediction选择
-            self.selected_face_idx = None  # 清空选中面
+            self.selected_face_indices.clear()  # 清空选中面
+            self._sync_face_list_selection_from_state()  # 同步面列表
             self._refresh_selection_colors()  # 恢复颜色
 
     def _on_select(self, source: str, selected_shapes, *args, **kwargs):
         if not self.face_select_enabled:  # 未开启选择
             return  # 直接返回
+        ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         if not selected_shapes:  # 点击空白处取消选择
-            if self.selected_face_idx is not None:
-                self.selected_face_idx = None  # 清空选中面
+            if self.selected_face_indices and not ctrl_pressed:
+                self.selected_face_indices.clear()  # 清空选中面
                 self.faceListWidget.clearSelection()  # 清空面列表选中
                 self._refresh_selection_colors()  # 刷新颜色
             return  # 直接返回
@@ -1005,15 +1010,34 @@ class App(QDialog):  # 主界面
         face_idx = self.face_index_by_hash.get(selected_shape.HashCode(2147483647))  # 查找索引
         if face_idx is None:  # 未匹配
             return  # 直接返回
-        if self.selected_face_idx == face_idx:  # 再次点击同一面则取消
-            self.selected_face_idx = None  # 取消选中
-        else:  # 选择新面
-            self.selected_face_idx = face_idx  # 更新选中面
+        if ctrl_pressed:
+            if face_idx in self.selected_face_indices:  # Ctrl+点击已选中面则取消
+                self.selected_face_indices.remove(face_idx)
+            else:  # Ctrl+点击未选中面则追加
+                self.selected_face_indices.append(face_idx)
+        else:  # 普通点击单选
+            self.selected_face_indices = [face_idx]
 
-        if 0 <= face_idx < self.faceListWidget.count():  # 同步面列表选中
-            self.faceListWidget.setCurrentRow(face_idx)
+        self.selected_face_indices = sorted(set(self.selected_face_indices))
+        self._sync_face_list_selection_from_state()  # 同步面列表选中
 
         self._refresh_selection_colors()  # 刷新颜色
+
+    def _sync_face_list_selection_from_state(self):
+        if not hasattr(self, "faceListWidget"):
+            return
+        selected_set = set(self.selected_face_indices)
+        self.faceListWidget.blockSignals(True)
+        try:
+            for idx in range(self.faceListWidget.count()):
+                item = self.faceListWidget.item(idx)
+                item.setSelected(idx in selected_set)
+            if self.selected_face_indices:
+                self.faceListWidget.setCurrentRow(self.selected_face_indices[-1])
+            else:
+                self.faceListWidget.clearSelection()
+        finally:
+            self.faceListWidget.blockSignals(False)
 
     def eventFilter(self, obj, event):
         if obj in (self.gt_canvas, self.pred_canvas):
@@ -1056,8 +1080,8 @@ class App(QDialog):  # 主界面
         menu.exec_(global_pos)  # 弹出菜单
 
     def _edit_selected_face_gt_label(self):
-        if self.selected_face_idx is None:  # 未选中面
-            self.msgBox.warning(self, "警告", "请先选中一个面")  # 提示
+        if not self.selected_face_indices:  # 未选中面
+            self.msgBox.warning(self, "警告", "请先选中一个或多个面")  # 提示
             return  # 直接返回
         if not self.label_dir:  # 未选择标签目录
             self.msgBox.warning(self, "警告", "请先加载标签文件夹")  # 提示
@@ -1076,13 +1100,14 @@ class App(QDialog):  # 主界面
             self.current_gt_labels = labels  # 缓存
 
         options, option_map = self._label_options()  # 选项
-        current_label = self.current_gt_labels[self.selected_face_idx]  # 当前标签
+        first_face_idx = self.selected_face_indices[0]
+        current_label = self.current_gt_labels[first_face_idx]  # 当前标签（以第一个选中面为准）
         current_text = option_map.get(current_label, options[0])  # 默认项
         current_index = options.index(current_text) if current_text in options else 0
 
         selected_text, ok = QInputDialog.getItem(
             self,
-            "修改GT标签",
+            "批量修改GT标签",
             "选择类别",
             options,
             current_index,
@@ -1092,11 +1117,11 @@ class App(QDialog):  # 主界面
             return  # 取消
 
         new_label = int(selected_text.split(":", 1)[0])  # 解析标签
-        self._apply_single_label_change("gt", self.selected_face_idx, new_label, record_history=True)  # 更新并记录
+        self._apply_multi_label_change("gt", self.selected_face_indices, new_label, record_history=True)  # 批量更新并记录
 
     def _edit_selected_face_pred_label(self):
-        if self.selected_face_idx is None:  # 未选中面
-            self.msgBox.warning(self, "警告", "请先选中一个面")  # 提示
+        if not self.selected_face_indices:  # 未选中面
+            self.msgBox.warning(self, "警告", "请先选中一个或多个面")  # 提示
             return  # 直接返回
 
         if not self.current_pred_labels:  # 无预测结果
@@ -1104,13 +1129,14 @@ class App(QDialog):  # 主界面
             return  # 直接返回
 
         options, option_map = self._label_options_for_labels(self.current_pred_labels)  # 选项
-        current_label = self.current_pred_labels[self.selected_face_idx]  # 当前标签
+        first_face_idx = self.selected_face_indices[0]
+        current_label = self.current_pred_labels[first_face_idx]  # 当前标签（以第一个选中面为准）
         current_text = option_map.get(current_label, options[0])  # 默认项
         current_index = options.index(current_text) if current_text in options else 0
 
         selected_text, ok = QInputDialog.getItem(
             self,
-            "修改预测标签",
+            "批量修改预测标签",
             "选择类别",
             options,
             current_index,
@@ -1120,7 +1146,49 @@ class App(QDialog):  # 主界面
             return  # 取消
 
         new_label = int(selected_text.split(":", 1)[0])  # 解析标签
-        self._apply_single_label_change("pred", self.selected_face_idx, new_label, record_history=True)  # 更新并记录
+        self._apply_multi_label_change("pred", self.selected_face_indices, new_label, record_history=True)  # 批量更新并记录
+
+    def _apply_multi_label_change(self, target: str, face_indices: List[int], new_label: int, record_history: bool):
+        unique_face_indices = sorted({idx for idx in face_indices if 0 <= idx < len(self.faces_list)})
+        if not unique_face_indices:
+            return
+
+        old_labels_map: Dict[int, int] = {}
+        for face_idx in unique_face_indices:
+            if target == "gt":
+                if self.current_gt_labels is None:
+                    return
+                old_label = int(self.current_gt_labels[face_idx])
+            elif target == "pred":
+                if self.current_pred_labels is None:
+                    return
+                old_label = int(self.current_pred_labels[face_idx])
+            else:
+                return
+            if old_label != int(new_label):
+                old_labels_map[int(face_idx)] = old_label
+
+        if not old_labels_map:
+            return
+
+        for face_idx in old_labels_map.keys():
+            self._apply_single_label_change(
+                target=target,
+                face_idx=face_idx,
+                new_label=int(new_label),
+                record_history=False,
+            )
+
+        if record_history:
+            self.undo_stack.append(
+                {
+                    "target": target,
+                    "face_indices": sorted(old_labels_map.keys()),
+                    "old_labels": [old_labels_map[idx] for idx in sorted(old_labels_map.keys())],
+                    "new_label": int(new_label),
+                }
+            )
+            self.redo_stack.clear()
 
     def _apply_single_label_change(self, target: str, face_idx: int, new_label: int, record_history: bool):
         if face_idx < 0 or face_idx >= len(self.faces_list):
@@ -1162,6 +1230,16 @@ class App(QDialog):  # 主界面
         if not self.undo_stack:
             return
         op = self.undo_stack.pop()
+        if "face_indices" in op and "old_labels" in op:
+            for face_idx, old_label in zip(op["face_indices"], op["old_labels"]):
+                self._apply_single_label_change(
+                    target=op["target"],
+                    face_idx=face_idx,
+                    new_label=old_label,
+                    record_history=False,
+                )
+            self.redo_stack.append(op)
+            return
         self._apply_single_label_change(
             target=op["target"],
             face_idx=op["face_idx"],
@@ -1174,6 +1252,15 @@ class App(QDialog):  # 主界面
         if not self.redo_stack:
             return
         op = self.redo_stack.pop()
+        if "face_indices" in op and "new_label" in op:
+            self._apply_multi_label_change(
+                target=op["target"],
+                face_indices=op["face_indices"],
+                new_label=op["new_label"],
+                record_history=False,
+            )
+            self.undo_stack.append(op)
+            return
         self._apply_single_label_change(
             target=op["target"],
             face_idx=op["face_idx"],
@@ -1332,10 +1419,11 @@ class App(QDialog):  # 主界面
             self.pred_display.Context.Display(self.pred_ais_shape, True)  # 刷新Prediction显示
 
     def _apply_selection_overlay_to_shape(self, ais_shape):
-        if self.selected_face_idx is None:  # 无选中
+        if not self.selected_face_indices:  # 无选中
             return  # 直接返回
-        face_idx = self.selected_face_idx  # 当前选中面
-        if 0 <= face_idx < len(self.faces_list):  # 越界保护
+        for face_idx in self.selected_face_indices:  # 当前选中面
+            if not (0 <= face_idx < len(self.faces_list)):  # 越界保护
+                continue
             face_obj = self.faces_list[face_idx]  # 获取面
             ais_shape.SetCustomColor(face_obj, rgb_color(1.0, 1.0, 0.0))  # 高亮颜色
             ais_shape.SetCustomTransparency(face_obj, 0.0)  # 不透明
