@@ -13,7 +13,13 @@ if str(project_root) not in sys.path:  # 避免重复追加
 from OCC.Display.backend import load_backend  # OCC显示后端加载
 from OCC.Display.OCCViewer import rgb_color  # OCC颜色
 from OCC.Core.AIS import AIS_ColoredShape  # OCC着色形体
+from OCC.Core.Bnd import Bnd_Box  # 包围盒
+from OCC.Core.BRepBndLib import brepbndlib_Add  # 包围盒计算
+from OCC.Core.BRepAdaptor import BRepAdaptor_Surface  # 曲面适配器
+from OCC.Core.BRepTools import breptools_UVBounds  # 曲面UV范围
+from OCC.Core.GeomLProp import GeomLProp_SLProps  # 曲面微分属性
 from OCC.Extend.TopologyUtils import TopologyExplorer  # OCC拓扑遍历
+from OCC.Core.gp import gp_Dir, gp_Pnt, gp_Vec  # 几何对象
 from PyQt5.QtCore import Qt, QEvent  # Qt常量
 from PyQt5.QtGui import QKeySequence  # 快捷键序列
 from PyQt5.QtWidgets import (  # Qt控件
@@ -33,8 +39,9 @@ from PyQt5.QtWidgets import (  # Qt控件
     QAction,  # 菜单项
     QToolButton,  # 工具按钮
     QShortcut,  # 快捷键
+    QComboBox,  # 下拉选择框
 )
-from OCC.Core.TopAbs import TopAbs_FACE  # 拓扑类型
+from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_REVERSED  # 拓扑类型
 
 load_backend("qt-pyqt5")  # 指定Qt后端
 import OCC.Display.qtDisplay as qtDisplay  # OCC的Qt显示封装
@@ -95,7 +102,8 @@ class App(QDialog):  # 主界面
         self.last_step_file: Optional[Path] = None  # 上次选择的STEP文件
         self.face_index_by_hash: Dict[int, int] = {}  # 面哈希到索引
         self.face_select_enabled = False  # 面选择开关
-        self.selected_face_indices: List[int] = []  # 当前选中面索引列表
+        self.selected_face_indices_gt: List[int] = []  # GT当前选中面索引列表
+        self.selected_face_indices_pred: List[int] = []  # Prediction当前选中面索引列表
         self.current_gt_labels: Optional[List[int]] = None  # 当前GT标签
         self.current_pred_labels: Optional[List[int]] = None  # 当前预测标签
         self.gt_label_path: Optional[Path] = None  # 当前GT文件路径
@@ -105,6 +113,9 @@ class App(QDialog):  # 主界面
         self.pred_label_format: Optional[str] = None  # 当前预测保存格式
         self.pred_label_data = None  # 当前预测模板数据
         self.view_sync_lock = False  # 视口同步重入锁
+        self._viewport_press_pos = {"gt": None, "pred": None}  # 视口左键按下位置
+        self._viewport_dragging = {"gt": False, "pred": False}  # 视口是否处于拖拽旋转
+        self._suppress_next_select = False  # 拖拽释放后抑制一次选择回调
         self.undo_stack: List[Dict] = []  # 撤销栈
         self.redo_stack: List[Dict] = []  # 重做栈
         self.dialog_dirs: Dict[str, Optional[Path]] = {  # 各类对话框最近目录
@@ -115,6 +126,10 @@ class App(QDialog):  # 主界面
             "label_folder": None,
             "save_pred": None,
         }
+        self.step_avg_confidence_by_path: Dict[str, float] = {}  # STEP平均置信度缓存
+        self.step_pred_label_cache: Dict[str, List[int]] = {}  # STEP预测标签缓存
+        self.displayed_step_files: List[Path] = []  # 当前列表显示顺序
+        self.step_sort_mode = "name"  # STEP排序模式（name/confidence_desc/confidence_asc）
 
         self.gt_display = None  # GT显示对象
         self.pred_display = None  # Prediction显示对象
@@ -387,23 +402,38 @@ class App(QDialog):  # 主界面
         btn_segmentation.clicked.connect(self.featureRecog)  # 绑定点击事件
         panel_layout.addWidget(btn_segmentation, 8, 0, 1, 1)  # 放置按钮
 
+        # 创建批量分割按钮
+        btn_batch_segmentation = QPushButton("批量预测STEP列表", self)  # 批量分割按钮
+        btn_batch_segmentation.clicked.connect(self.batchFeatureRecog)  # 绑定点击事件
+        panel_layout.addWidget(btn_batch_segmentation, 9, 0, 1, 1)  # 放置按钮
+
         # 创建GT显示按钮
         self.btn_toggle_gt = QPushButton("显示GT标签", self)  # GT显示按钮
         self.btn_toggle_gt.clicked.connect(self.toggleGTVisualization)  # 绑定点击事件
-        panel_layout.addWidget(self.btn_toggle_gt, 9, 0, 1, 1)  # 放置按钮
+        panel_layout.addWidget(self.btn_toggle_gt, 10, 0, 1, 1)  # 放置按钮
 
         # 创建预测保存按钮
         btn_save_pred = QPushButton("保存预测标签", self)  # 保存预测按钮
         btn_save_pred.clicked.connect(self.savePredictionLabels)  # 绑定点击事件
-        panel_layout.addWidget(btn_save_pred, 10, 0, 1, 1)  # 放置按钮
+        panel_layout.addWidget(btn_save_pred, 11, 0, 1, 1)  # 放置按钮
 
-        # 创建STEP文件列表
+        # 创建STEP文件列表头（左标题，右排序）
+        self.step_header_widget = QWidget(self)  # STEP列表头容器
+        step_header_layout = QHBoxLayout()  # STEP列表头布局
+        step_header_layout.setContentsMargins(0, 0, 0, 0)  # 去边距
         self.step_list_label = QLabel("STEP文件列表", self)  # STEP列表标题
-        panel_layout.addWidget(self.step_list_label, 11, 0, 1, 1)  # 放置标题
+        self.stepSortCombo = QComboBox(self)  # 排序选择框
+        self.stepSortCombo.addItems(["按名称排序", "按平均置信度排序", "按最低置信度排序"])  # 排序选项
+        self.stepSortCombo.currentIndexChanged.connect(self._on_step_sort_changed)  # 绑定切换事件
+        step_header_layout.addWidget(self.step_list_label)  # 左侧标题
+        step_header_layout.addStretch(1)  # 中间弹性
+        step_header_layout.addWidget(self.stepSortCombo)  # 右侧排序
+        self.step_header_widget.setLayout(step_header_layout)  # 设置头布局
+        panel_layout.addWidget(self.step_header_widget, 12, 0, 1, 1)  # 放置标题栏
 
         self.stepListWidget = QListWidget()  # STEP列表
         self.stepListWidget.itemClicked.connect(self.stepListItemClicked)  # 绑定点击事件
-        panel_layout.addWidget(self.stepListWidget, 12, 0, 1, 1)  # 放置列表
+        panel_layout.addWidget(self.stepListWidget, 13, 0, 1, 1)  # 放置列表
 
         # 创建双视口容器（左GT，右Prediction）
         viewports_container = QWidget()  # 双视口容器
@@ -440,36 +470,46 @@ class App(QDialog):  # 主界面
         self.gt_display = self.gt_canvas._display  # GT显示对象
         self.pred_display = self.pred_canvas._display  # Prediction显示对象
 
-        # 创建右侧面列表面板
+        # 创建右侧面列表面板（GT/Prediction分离）
         self.face_panel = QWidget()  # 面列表容器
         self.face_panel.setFixedWidth(200)  # 固定宽度
         face_layout = QVBoxLayout()  # 面列表布局
 
-        self.face_list_label = QLabel("面列表", self)  # 面列表标题
-        face_layout.addWidget(self.face_list_label)  # 放置标题
+        self.gt_face_list_label = QLabel("GT面列表", self)  # GT面列表标题
+        face_layout.addWidget(self.gt_face_list_label)  # 放置标题
 
-        self.faceListWidget = QListWidget()  # 面列表
-        self.faceListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 允许Ctrl多选
-        self.faceListWidget.itemClicked.connect(self.faceListItemClicked)  # 绑定点击事件
-        self.faceListWidget.setContextMenuPolicy(Qt.CustomContextMenu)  # 启用自定义右键
-        self.faceListWidget.customContextMenuRequested.connect(self.faceListContextMenu)  # 绑定右键菜单
-        face_layout.addWidget(self.faceListWidget)  # 放置列表
+        self.gtFaceListWidget = QListWidget()  # GT面列表
+        self.gtFaceListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 允许Ctrl多选
+        self.gtFaceListWidget.itemClicked.connect(self.faceListItemClickedGT)  # 绑定点击事件
+        self.gtFaceListWidget.setContextMenuPolicy(Qt.CustomContextMenu)  # 启用自定义右键
+        self.gtFaceListWidget.customContextMenuRequested.connect(self.faceListContextMenuGT)  # 绑定右键菜单
+        face_layout.addWidget(self.gtFaceListWidget)  # 放置列表
+
+        self.pred_face_list_label = QLabel("Prediction面列表", self)  # Prediction面列表标题
+        face_layout.addWidget(self.pred_face_list_label)  # 放置标题
+
+        self.predFaceListWidget = QListWidget()  # Prediction面列表
+        self.predFaceListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 允许Ctrl多选
+        self.predFaceListWidget.itemClicked.connect(self.faceListItemClickedPred)  # 绑定点击事件
+        self.predFaceListWidget.setContextMenuPolicy(Qt.CustomContextMenu)  # 启用自定义右键
+        self.predFaceListWidget.customContextMenuRequested.connect(self.faceListContextMenuPred)  # 绑定右键菜单
+        face_layout.addWidget(self.predFaceListWidget)  # 放置列表
 
         self.face_panel.setLayout(face_layout)  # 设置布局
         canvas_layout.addWidget(self.face_panel)  # 添加右侧面板
 
         # 创建GT与Prediction特征列表（上下布局）
         self.gtFeatureListLabel = QLabel("GT标注列表", self)  # GT标注列表标题
-        panel_layout.addWidget(self.gtFeatureListLabel, 13, 0, 1, 1)  # 放置标题
+        panel_layout.addWidget(self.gtFeatureListLabel, 14, 0, 1, 1)  # 放置标题
         self.gtFeatureListWidget = QListWidget()  # GT特征列表
-        self.gtFeatureListWidget.itemDoubleClicked.connect(self.gtFeatureListDoubleClicked)  # 绑定双击事件
-        panel_layout.addWidget(self.gtFeatureListWidget, 14, 0, 1, 1)  # 放置列表
+        self.gtFeatureListWidget.itemClicked.connect(self.gtFeatureListDoubleClicked)  # 绑定点击事件
+        panel_layout.addWidget(self.gtFeatureListWidget, 15, 0, 1, 1)  # 放置列表
 
         self.predFeatureListLabel = QLabel("Prediction标注列表", self)  # Prediction标注列表标题
-        panel_layout.addWidget(self.predFeatureListLabel, 15, 0, 1, 1)  # 放置标题
+        panel_layout.addWidget(self.predFeatureListLabel, 16, 0, 1, 1)  # 放置标题
         self.predFeatureListWidget = QListWidget()  # Prediction特征列表
-        self.predFeatureListWidget.itemDoubleClicked.connect(self.predFeatureListDoubleClicked)  # 绑定双击事件
-        panel_layout.addWidget(self.predFeatureListWidget, 16, 0, 1, 1)  # 放置列表
+        self.predFeatureListWidget.itemClicked.connect(self.predFeatureListDoubleClicked)  # 绑定点击事件
+        panel_layout.addWidget(self.predFeatureListWidget, 17, 0, 1, 1)  # 放置列表
 
         # 应用布局
         self.horizontalGroupBox.setLayout(canvas_layout)  # 设置右侧布局
@@ -586,8 +626,14 @@ class App(QDialog):  # 主界面
 
         topology_explorer = TopologyExplorer(solid_shape)  # 创建拓扑遍历器
         self.faces_list = list(topology_explorer.faces())  # 提取并记录所有面对象
+        self.selected_face_indices_gt.clear()  # 新模型加载后清空GT选择
+        self.selected_face_indices_pred.clear()  # 新模型加载后清空Prediction选择
         self._build_face_index()  # 构建面索引
         self._populate_face_list()  # 更新面列表
+        self._set_shape_all_gray(self.gt_ais_shape)  # 默认全灰
+        self._set_shape_all_gray(self.pred_ais_shape)  # 默认全灰
+        self.gt_display.Context.Display(self.gt_ais_shape, True)
+        self.pred_display.Context.Display(self.pred_ais_shape, True)
         self._update_window_title()  # 更新窗口标题显示当前文件
 
         if self.face_select_enabled:  # 若启用选择模式
@@ -595,10 +641,23 @@ class App(QDialog):  # 主界面
             self.pred_display.Context.Activate(self.pred_ais_shape, TopAbs_FACE, True)  # 启用Prediction面选择
 
         self.last_step_file = step_path  # 记录最后选择
+        self._apply_cached_prediction_for_current_step()  # 若有批量预测缓存则直接显示
         self._save_state()  # 保存状态
 
         if self.gt_enabled:  # 若已开启GT显示
             self._apply_gt_labels()  # 自动刷新GT颜色
+
+    def _apply_cached_prediction_for_current_step(self):
+        if not (self.file_name and self.pred_ais_shape):
+            return
+        step_key = str(Path(self.file_name))
+        cached_labels = self.step_pred_label_cache.get(step_key)
+        if not cached_labels:
+            return
+        if len(cached_labels) != len(self.faces_list):
+            return
+        self.current_pred_labels = list(cached_labels)
+        self._apply_pred_labels_from_labels(self.current_pred_labels)
 
     def eraseShape(self):
         if self.gt_ais_shape or self.pred_ais_shape:  # 若存在对象
@@ -617,9 +676,12 @@ class App(QDialog):  # 主界面
             self.gt_class_index_by_row.clear()  # 清空GT行映射
             self.pred_class_index_by_row.clear()  # 清空Prediction行映射
             self.face_index_by_hash.clear()  # 清空面哈希
-            self.selected_face_indices.clear()  # 清空选中面
-            if hasattr(self, "faceListWidget"):
-                self.faceListWidget.clear()  # 清空面列表
+            self.selected_face_indices_gt.clear()  # 清空GT选中面
+            self.selected_face_indices_pred.clear()  # 清空Prediction选中面
+            if hasattr(self, "gtFaceListWidget"):
+                self.gtFaceListWidget.clear()  # 清空GT面列表
+            if hasattr(self, "predFaceListWidget"):
+                self.predFaceListWidget.clear()  # 清空Prediction面列表
             self.current_gt_labels = None  # 清空GT标签
             self.current_pred_labels = None  # 清空预测标签
             self.gt_label_path = None  # 清空GT路径
@@ -637,62 +699,183 @@ class App(QDialog):  # 主界面
         if not (self.pred_ais_shape and self.file_name and self.attribute_schema):  # 前置检查
             return  # 直接返回
 
-        if not self._ensure_model_ready():  # 推理前加载并校验模型
-            err = self.model_load_error or "模型未初始化，请先加载配置和权重"
-            self.msgBox.warning(self, "warning", err)  # 仅提示，不崩溃
-            return  # 直接返回
-
         start_time = time.time()  # 开始计时
-        aag_data = self._load_precomputed_aag_data()  # 优先使用预计算AAG（与训练/测试一致）
-        if aag_data is None:
-            try:  # AAG提取
-                aag_extractor = AAGExtractor(self.file_name, self.attribute_schema)  # 构建提取器
-                aag_data = aag_extractor.process()  # 执行AAG提取
-            except Exception as e:  # 异常处理
-                self.msgBox.warning(self, "warning", f"AAG提取失败: {e}")  # 提示
-                return  # 直接返回
-
-        sample_dict = load_one_graph(self.file_name, aag_data)  # 构建DGL图
-        dim_err = self._validate_graph_feature_dims(sample_dict["graph"])  # 推理前维度校验
-        if dim_err:
-            self.msgBox.warning(self, "warning", f"输入特征维度与模型配置不匹配：{dim_err}\n建议检查feature schema或使用与训练一致的预计算AAG数据。")
+        labels, avg_confidence, err = self._predict_step(Path(self.file_name))  # 执行单文件预测
+        if err:
+            self.msgBox.warning(self, "warning", err)  # 提示
             return
-        if self.normalize and self.stat is not None:  # 标准化开关打开
-            sample_dict = standardization(sample_dict, self.stat)  # 应用统计量标准化
-        if self.do_center_and_scale:  # 居中缩放开关打开
-            sample_dict = center_and_scale(sample_dict)  # 应用居中缩放变换
-
-        input_graph = sample_dict["graph"].to(self.device)  # 移动图到推理设备
-        del sample_dict  # 删除中间字典节省内存
-        preprocess_time = time.time()  # 预处理完成时间
-        print(f"预处理耗时: {preprocess_time - start_time:.3f}s")  # 输出耗时
-
-        with torch.no_grad():  # 关闭梯度计算
-            try:  # 前向推理
-                segmentation_logits = self.recognizer(input_graph)  # 获取分割logits
-            except Exception as e:  # 推理异常
-                self.msgBox.warning(self, "warning", f"推理失败: {e}")  # 提示
-                return  # 直接返回
-
-            inference_time = time.time()  # 前向结束时间
-            print(f"推理耗时: {inference_time - preprocess_time:.3f}s")  # 输出耗时
-
-            face_logits_np = segmentation_logits.cpu().numpy()  # 转为numpy数组
-            predicted_classes = np.argmax(face_logits_np, axis=1)  # 按行取最大值索引
-
-        del input_graph, segmentation_logits, face_logits_np  # 删除推理中间变量节省内存
+        if labels is None:
+            self.msgBox.warning(self, "warning", "预测失败：未返回标签")  # 提示
+            return
+        if len(labels) != len(self.faces_list):  # 防御性检查
+            self.msgBox.warning(self, "warning", "预测标签数量与当前STEP面数量不一致")
+            return
 
         class_to_faces_map: Dict[int, List[int]] = {}  # 类别到面索引的映射字典
-        for face_idx, class_idx in enumerate(predicted_classes.tolist()):  # 遍历预测结果
+        for face_idx, class_idx in enumerate(labels):  # 遍历预测结果
             class_to_faces_map.setdefault(class_idx, []).append(face_idx)  # 聚合同类别的面
 
-        self.current_pred_labels = predicted_classes.tolist()  # 缓存预测标签
+        self.current_pred_labels = labels  # 缓存预测标签
         self._populate_pred_feature_list(class_to_faces_map)  # 更新预测特征列表
         self._apply_pred_labels_from_labels(self.current_pred_labels)  # 应用预测颜色
 
+        if avg_confidence is not None:
+            step_key = str(Path(self.file_name))
+            self.step_avg_confidence_by_path[step_key] = float(avg_confidence)  # 缓存平均置信度
+            self.step_pred_label_cache[step_key] = list(labels)  # 缓存预测标签
+            self._populate_step_list()  # 刷新列表显示置信度/排序
+
         postprocess_time = time.time()  # 后处理完成时间
-        print(f"后处理耗时: {postprocess_time - inference_time:.3f}s")  # 输出耗时
+        print(f"后处理耗时: {postprocess_time - start_time:.3f}s")  # 输出耗时
         print(f"总耗时: {time.time() - start_time:.3f}s")  # 输出总耗时
+
+    def _load_precomputed_aag_data_for_step(self, step_path: Path) -> Optional[Dict]:
+        candidates: List[Path] = []
+
+        data_root = self._resolve_data_root()
+        if data_root is not None:
+            candidates.append(data_root / "aag" / f"{step_path.stem}.json")
+
+        if step_path.parent.name.lower() == "steps":
+            candidates.append(step_path.parent.parent / "aag" / f"{step_path.stem}.json")
+
+        for aag_path in candidates:
+            if not aag_path.exists():
+                continue
+            try:
+                payload = load_json_or_pkl(aag_path)
+            except Exception:
+                continue
+            if isinstance(payload, list) and len(payload) == 2 and isinstance(payload[1], dict):
+                return payload[1]
+            if isinstance(payload, dict):
+                return payload
+        return None
+
+    def _predict_step(self, step_path: Path) -> Tuple[Optional[List[int]], Optional[float], Optional[str]]:
+        if not self.attribute_schema:
+            return None, None, "特征schema未加载，请先加载配置"
+        if not self._ensure_model_ready():
+            return None, None, self.model_load_error or "模型未初始化，请先加载配置和权重"
+
+        step_path_str = str(step_path)
+        aag_data = self._load_precomputed_aag_data_for_step(step_path)
+        if aag_data is None:
+            try:
+                aag_extractor = AAGExtractor(step_path_str, self.attribute_schema)
+                aag_data = aag_extractor.process()
+            except Exception as e:
+                return None, None, f"AAG提取失败 ({step_path.name}): {e}"
+
+        try:
+            sample_dict = load_one_graph(step_path_str, aag_data)
+        except Exception as e:
+            return None, None, f"图构建失败 ({step_path.name}): {e}"
+
+        dim_err = self._validate_graph_feature_dims(sample_dict["graph"])
+        if dim_err:
+            return None, None, f"输入特征维度与模型配置不匹配 ({step_path.name})：{dim_err}"
+
+        if self.normalize and self.stat is not None:
+            sample_dict = standardization(sample_dict, self.stat)
+        if self.do_center_and_scale:
+            sample_dict = center_and_scale(sample_dict)
+
+        input_graph = sample_dict["graph"].to(self.device)
+        del sample_dict
+
+        with torch.no_grad():
+            try:
+                segmentation_logits = self.recognizer(input_graph)
+            except Exception as e:
+                return None, None, f"推理失败 ({step_path.name}): {e}"
+
+            probabilities = torch.softmax(segmentation_logits, dim=1)
+            max_probabilities, predicted_classes = torch.max(probabilities, dim=1)
+            avg_confidence = float(max_probabilities.mean().item()) if max_probabilities.numel() > 0 else 0.0
+            labels = predicted_classes.cpu().tolist()
+
+        del input_graph, segmentation_logits, probabilities, max_probabilities, predicted_classes
+        return labels, avg_confidence, None
+
+    def batchFeatureRecog(self):
+        if not self.step_files:
+            self.msgBox.warning(self, "warning", "请先加载STEP文件夹并确保列表非空")
+            return
+
+        start_time = time.time()
+        success_count = 0
+        fail_count = 0
+        fail_examples: List[str] = []
+
+        for step_path in self.step_files:
+            labels, avg_confidence, err = self._predict_step(step_path)
+            if err or labels is None or avg_confidence is None:
+                fail_count += 1
+                if err and len(fail_examples) < 3:
+                    fail_examples.append(err)
+                QApplication.processEvents()
+                continue
+
+            step_key = str(step_path)
+            self.step_avg_confidence_by_path[step_key] = float(avg_confidence)
+            self.step_pred_label_cache[step_key] = list(labels)
+            success_count += 1
+            QApplication.processEvents()
+
+        self._populate_step_list()  # 刷新列表（含排序与置信度显示）
+
+        elapsed = time.time() - start_time
+        msg = f"批量预测完成\n成功: {success_count}\n失败: {fail_count}\n耗时: {elapsed:.2f}s"
+        if fail_examples:
+            msg += "\n\n失败示例:\n" + "\n".join(fail_examples)
+        self.msgBox.information(self, "提示", msg)
+
+    def _gray_color(self) -> Tuple[float, float, float]:
+        return (0.65, 0.65, 0.65)
+
+    def _selection_highlight_color(self) -> Tuple[float, float, float]:
+        return (1.0, 0.85, 0.2)
+
+    def _set_shape_all_gray(self, ais_shape):
+        if not ais_shape:
+            return
+        ais_shape.ClearCustomAspects()
+        gray = self._gray_color()
+        for face_obj in self.faces_list:
+            ais_shape.SetCustomColor(face_obj, rgb_color(*gray))
+            ais_shape.SetCustomTransparency(face_obj, 0.0)
+
+    def _apply_selection_coloring_for_view(self, target: str):
+        if target == "gt":
+            ais_shape = self.gt_ais_shape
+            display = self.gt_display
+            labels = self.current_gt_labels if self.gt_enabled else None
+        else:
+            ais_shape = self.pred_ais_shape
+            display = self.pred_display
+            labels = self.current_pred_labels
+
+        if not ais_shape:
+            return
+
+        self._set_shape_all_gray(ais_shape)
+        has_valid_labels = bool(labels) and len(labels) == len(self.faces_list)
+        selected_face_indices = self._get_selection(target)
+        for face_idx in selected_face_indices:
+            if not (0 <= face_idx < len(self.faces_list)):
+                continue
+            face_obj = self.faces_list[face_idx]
+            if has_valid_labels:
+                class_idx = int(labels[face_idx])
+                color = self._class_color(class_idx)
+            else:
+                color = self._selection_highlight_color()
+            ais_shape.SetCustomColor(face_obj, rgb_color(*color))
+            ais_shape.SetCustomTransparency(face_obj, 0.0)
+
+        if display is not None:
+            display.Context.Display(ais_shape, True)
 
     def _class_name(self, class_idx: int) -> str:
         default_label_names = ["other", "hole", "slot groove"]  # 默认类别名顺序
@@ -727,7 +910,7 @@ class App(QDialog):  # 主界面
         return (v, p, q)  # 区间5
 
     def predFeatureListDoubleClicked(self):
-        """双击Prediction列表项高亮选中类别：将选中类别的面着色不透明，其他面变白色半透明"""
+        """点击Prediction类别项：默认整类选中；按住Ctrl从当前选择中减去该类"""
         if not (self.pred_ais_shape and self.file_name and len(self.pred_features_list) != 0):  # 前置条件检查
             return  # 直接返回
 
@@ -736,25 +919,21 @@ class App(QDialog):  # 主界面
             return  # 直接返回
 
         selected_feature = self.pred_features_list[selected_row_idx]  # 获取选中的特征对象
-        selected_class_idx = self.pred_class_index_by_row[selected_row_idx]  # 获取对应的类别索引
-
-        self.pred_ais_shape.ClearCustomAspects()  # 清除所有自定义渲染属性
-        for face_obj in self.faces_list:  # 遍历所有面对象
-            self.pred_ais_shape.SetCustomColor(face_obj, rgb_color(1, 1, 1))  # 设置为白色
-            self.pred_ais_shape.SetCustomTransparency(face_obj, 0.6)  # 设置60%透明度
-
-        highlight_color = self._class_color(selected_class_idx)  # 计算高亮颜色
-        for face_idx in selected_feature.faces:  # 遍历选中类别的面索引
-            face_obj = self.faces_list[face_idx]  # 获取对应的面对象
-            self.pred_ais_shape.SetCustomColor(face_obj, rgb_color(*highlight_color))  # 设置类别颜色
-            self.pred_ais_shape.SetCustomTransparency(face_obj, 0.0)  # 设置不透明
-
-        self._apply_selection_overlay_to_shape(self.pred_ais_shape)  # 叠加选中高亮
-
-        self.pred_display.Context.Display(self.pred_ais_shape, True)  # 刷新Prediction显示上下文
+        class_faces = sorted({idx for idx in selected_feature.faces if 0 <= idx < len(self.faces_list)})
+        ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        if ctrl_pressed:
+            selected_set = set(self.selected_face_indices_pred)
+            for face_idx in class_faces:
+                if face_idx in selected_set:
+                    selected_set.remove(face_idx)
+                else:
+                    selected_set.add(face_idx)
+            self._set_selection("pred", sorted(selected_set), record_history=True)
+        else:
+            self._set_selection("pred", class_faces, record_history=True)
 
     def gtFeatureListDoubleClicked(self):
-        """双击GT列表项高亮选中类别：将选中类别的面着色不透明，其他面变白色半透明"""
+        """点击GT类别项：默认整类选中；按住Ctrl从当前选择中减去该类"""
         if not (self.gt_ais_shape and self.file_name and len(self.gt_features_list) != 0):  # 前置条件检查
             return  # 直接返回
 
@@ -763,22 +942,18 @@ class App(QDialog):  # 主界面
             return  # 直接返回
 
         selected_feature = self.gt_features_list[selected_row_idx]  # 获取选中的特征对象
-        selected_class_idx = self.gt_class_index_by_row[selected_row_idx]  # 获取对应的类别索引
-
-        self.gt_ais_shape.ClearCustomAspects()  # 清除所有自定义渲染属性
-        for face_obj in self.faces_list:  # 遍历所有面对象
-            self.gt_ais_shape.SetCustomColor(face_obj, rgb_color(1, 1, 1))  # 设置为白色
-            self.gt_ais_shape.SetCustomTransparency(face_obj, 0.6)  # 设置60%透明度
-
-        highlight_color = self._class_color(selected_class_idx)  # 计算高亮颜色
-        for face_idx in selected_feature.faces:  # 遍历选中类别的面索引
-            face_obj = self.faces_list[face_idx]  # 获取对应的面对象
-            self.gt_ais_shape.SetCustomColor(face_obj, rgb_color(*highlight_color))  # 设置类别颜色
-            self.gt_ais_shape.SetCustomTransparency(face_obj, 0.0)  # 设置不透明
-
-        self._apply_selection_overlay_to_shape(self.gt_ais_shape)  # 叠加选中高亮
-
-        self.gt_display.Context.Display(self.gt_ais_shape, True)  # 刷新GT显示上下文
+        class_faces = sorted({idx for idx in selected_feature.faces if 0 <= idx < len(self.faces_list)})
+        ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        if ctrl_pressed:
+            selected_set = set(self.selected_face_indices_gt)
+            for face_idx in class_faces:
+                if face_idx in selected_set:
+                    selected_set.remove(face_idx)
+                else:
+                    selected_set.add(face_idx)
+            self._set_selection("gt", sorted(selected_set), record_history=True)
+        else:
+            self._set_selection("gt", class_faces, record_history=True)
 
     def openStepFolder(self):
         default_dir = self._dialog_dir("step_folder", self.step_dir or Path("./"))  # 默认路径
@@ -818,8 +993,7 @@ class App(QDialog):  # 主界面
         if self.gt_enabled:  # 开启GT显示
             self._apply_gt_labels()  # 应用GT颜色
         else:  # 关闭GT显示
-            self.gt_ais_shape.ClearCustomAspects()  # 清除GT自定义颜色
-            self._apply_selection_overlay_to_shape(self.gt_ais_shape)  # 叠加选中高亮
+            self._set_shape_all_gray(self.gt_ais_shape)  # 恢复全灰
             self.gt_display.Context.Display(self.gt_ais_shape, True)  # 刷新GT显示
             self.gtFeatureListWidget.clear()  # 清空GT列表
             self.gt_features_list.clear()  # 清空GT特征
@@ -954,32 +1128,62 @@ class App(QDialog):  # 主界面
             self.face_index_by_hash[face.HashCode(2147483647)] = idx  # 哈希索引
 
     def _populate_face_list(self):
-        if not hasattr(self, "faceListWidget"):
+        if not hasattr(self, "gtFaceListWidget") or not hasattr(self, "predFaceListWidget"):
             return
-        self.faceListWidget.clear()
+        self.gtFaceListWidget.clear()
+        self.predFaceListWidget.clear()
         for idx in range(len(self.faces_list)):
-            self.faceListWidget.addItem(f"Face {idx}")
+            text = f"Face {idx}"
+            self.gtFaceListWidget.addItem(text)
+            self.predFaceListWidget.addItem(text)
 
-    def faceListItemClicked(self):
-        selected_rows = sorted({self.faceListWidget.row(item) for item in self.faceListWidget.selectedItems()})
-        self.selected_face_indices = [idx for idx in selected_rows if 0 <= idx < len(self.faces_list)]
-        self._refresh_selection_colors()  # 刷新颜色
+    def _faceListItemClicked(self, target: str, list_widget: QListWidget):
+        selected_rows = sorted({list_widget.row(item) for item in list_widget.selectedItems()})
+        ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        current_row = list_widget.currentRow()
+        if ctrl_pressed and 0 <= current_row < len(self.faces_list):
+            selected_set = set(self._get_selection(target))
+            if current_row in selected_set:
+                selected_set.remove(current_row)
+            else:
+                selected_set.add(current_row)
+            self._set_selection(target, sorted(selected_set), record_history=True)
+        else:
+            self._set_selection(
+                target,
+                [idx for idx in selected_rows if 0 <= idx < len(self.faces_list)],
+                record_history=True,
+            )
 
-    def faceListContextMenu(self, pos):
-        item = self.faceListWidget.itemAt(pos)  # 获取右键项
+    def faceListItemClickedGT(self):
+        self._faceListItemClicked("gt", self.gtFaceListWidget)
+
+    def faceListItemClickedPred(self):
+        self._faceListItemClicked("pred", self.predFaceListWidget)
+
+    def _faceListContextMenu(self, target: str, list_widget: QListWidget, pos):
+        item = list_widget.itemAt(pos)  # 获取右键项
         ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         if item is not None:
-            row = self.faceListWidget.row(item)  # 获取行
+            row = list_widget.row(item)  # 获取行
             if 0 <= row < len(self.faces_list):
-                if row not in self.selected_face_indices and not ctrl_pressed:
-                    self.selected_face_indices = [row]
-                elif row not in self.selected_face_indices and ctrl_pressed:
-                    self.selected_face_indices.append(row)
-                self.selected_face_indices = sorted(set(self.selected_face_indices))
-                self._sync_face_list_selection_from_state()
-        self._refresh_selection_colors()  # 刷新颜色
-        global_pos = self.faceListWidget.mapToGlobal(pos)  # 转全局坐标
-        self._show_face_edit_menu(global_pos)  # 右键菜单
+                if not ctrl_pressed:
+                    self._set_selection(target, [row], record_history=True)
+                else:
+                    selected_set = set(self._get_selection(target))
+                    if row in selected_set:
+                        selected_set.remove(row)
+                    else:
+                        selected_set.add(row)
+                    self._set_selection(target, sorted(selected_set), record_history=True)
+        global_pos = list_widget.mapToGlobal(pos)  # 转全局坐标
+        self._show_face_edit_menu(global_pos, target, show_locate=True)  # 右键菜单
+
+    def faceListContextMenuGT(self, pos):
+        self._faceListContextMenu("gt", self.gtFaceListWidget, pos)
+
+    def faceListContextMenuPred(self, pos):
+        self._faceListContextMenu("pred", self.predFaceListWidget, pos)
 
     def toggleFaceSelection(self):
         if not (self.gt_ais_shape and self.pred_ais_shape):  # 未加载STEP
@@ -992,57 +1196,106 @@ class App(QDialog):  # 主界面
         else:  # 关闭
             self.gt_display.Context.Deactivate(self.gt_ais_shape)  # 关闭GT选择
             self.pred_display.Context.Deactivate(self.pred_ais_shape)  # 关闭Prediction选择
-            self.selected_face_indices.clear()  # 清空选中面
-            self._sync_face_list_selection_from_state()  # 同步面列表
-            self._refresh_selection_colors()  # 恢复颜色
+            self._set_selection("gt", [], record_history=True)  # 清空GT选中面
+            self._set_selection("pred", [], record_history=True)  # 清空Prediction选中面
 
     def _on_select(self, source: str, selected_shapes, *args, **kwargs):
         if not self.face_select_enabled:  # 未开启选择
             return  # 直接返回
+        if self._viewport_dragging.get(source, False):
+            return  # 拖拽旋转过程中忽略选择
+        if self._suppress_next_select:
+            self._suppress_next_select = False
+            return  # 拖拽释放后抑制一次误触发选择
         ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         if not selected_shapes:  # 点击空白处取消选择
-            if self.selected_face_indices and not ctrl_pressed:
-                self.selected_face_indices.clear()  # 清空选中面
-                self.faceListWidget.clearSelection()  # 清空面列表选中
-                self._refresh_selection_colors()  # 刷新颜色
+            if self._get_selection(source) and not ctrl_pressed:
+                self._set_selection(source, [], record_history=True)  # 清空当前视口选中面
             return  # 直接返回
         selected_shape = selected_shapes[0]  # 取第一个
         face_idx = self.face_index_by_hash.get(selected_shape.HashCode(2147483647))  # 查找索引
         if face_idx is None:  # 未匹配
             return  # 直接返回
         if ctrl_pressed:
-            if face_idx in self.selected_face_indices:  # Ctrl+点击已选中面则取消
-                self.selected_face_indices.remove(face_idx)
+            selected_set = set(self._get_selection(source))
+            if face_idx in selected_set:  # Ctrl+点击已选中面则取消
+                selected_set.remove(face_idx)
             else:  # Ctrl+点击未选中面则追加
-                self.selected_face_indices.append(face_idx)
+                selected_set.add(face_idx)
+            self._set_selection(source, sorted(selected_set), record_history=True)
         else:  # 普通点击单选
-            self.selected_face_indices = [face_idx]
+            self._set_selection(source, [face_idx], record_history=True)
 
-        self.selected_face_indices = sorted(set(self.selected_face_indices))
-        self._sync_face_list_selection_from_state()  # 同步面列表选中
+    def _get_selection(self, target: str) -> List[int]:
+        if target == "gt":
+            return self.selected_face_indices_gt
+        if target == "pred":
+            return self.selected_face_indices_pred
+        return []
 
-        self._refresh_selection_colors()  # 刷新颜色
-
-    def _sync_face_list_selection_from_state(self):
-        if not hasattr(self, "faceListWidget"):
+    def _set_selection(self, target: str, new_selection: List[int], record_history: bool = True):
+        if target not in ("gt", "pred"):
             return
-        selected_set = set(self.selected_face_indices)
-        self.faceListWidget.blockSignals(True)
+        normalized = sorted({idx for idx in new_selection if 0 <= idx < len(self.faces_list)})
+        old_selection = list(self._get_selection(target))
+        if normalized == old_selection:
+            return
+        if target == "gt":
+            self.selected_face_indices_gt = normalized
+        else:
+            self.selected_face_indices_pred = normalized
+        self._sync_face_list_selection_from_state(target)
+        self._apply_selection_coloring_for_view(target)
+        if record_history:
+            self.undo_stack.append(
+                {
+                    "op": "selection",
+                    "selection_target": target,
+                    "old_selection": old_selection,
+                    "new_selection": list(normalized),
+                }
+            )
+            self.redo_stack.clear()
+
+    def _sync_face_list_selection_from_state(self, target: str):
+        list_widget = self.gtFaceListWidget if target == "gt" else self.predFaceListWidget
+        selected_face_indices = self._get_selection(target)
+        if list_widget is None:
+            return
+        selected_set = set(selected_face_indices)
+        list_widget.blockSignals(True)
         try:
-            for idx in range(self.faceListWidget.count()):
-                item = self.faceListWidget.item(idx)
+            for idx in range(list_widget.count()):
+                item = list_widget.item(idx)
                 item.setSelected(idx in selected_set)
-            if self.selected_face_indices:
-                self.faceListWidget.setCurrentRow(self.selected_face_indices[-1])
+            if selected_face_indices:
+                list_widget.setCurrentRow(selected_face_indices[-1])
             else:
-                self.faceListWidget.clearSelection()
+                list_widget.clearSelection()
         finally:
-            self.faceListWidget.blockSignals(False)
+            list_widget.blockSignals(False)
 
     def eventFilter(self, obj, event):
         if obj in (self.gt_canvas, self.pred_canvas):
+            view_key = "gt" if obj is self.gt_canvas else "pred"
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._viewport_press_pos[view_key] = event.pos()
+                self._viewport_dragging[view_key] = False
+
+            if event.type() == QEvent.MouseMove and (event.buttons() & Qt.LeftButton):
+                press_pos = self._viewport_press_pos.get(view_key)
+                if press_pos is not None:
+                    if (event.pos() - press_pos).manhattanLength() >= 6:
+                        self._viewport_dragging[view_key] = True
+
+            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                if self._viewport_dragging.get(view_key, False):
+                    self._suppress_next_select = True
+                self._viewport_press_pos[view_key] = None
+                self._viewport_dragging[view_key] = False
+
             if self.face_select_enabled and event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
-                self._show_face_edit_menu(event.globalPos())  # 右键菜单
+                self._show_face_edit_menu(event.globalPos(), view_key)  # 右键菜单
                 return True
 
             if event.type() in (QEvent.MouseMove, QEvent.MouseButtonRelease, QEvent.Wheel):
@@ -1069,18 +1322,107 @@ class App(QDialog):  # 主界面
         finally:
             self.view_sync_lock = False  # 解锁
 
-    def _show_face_edit_menu(self, global_pos):
+    def _show_face_edit_menu(self, global_pos, target: Optional[str] = None, show_locate: bool = False):
         menu = QMenu(self)  # 右键菜单
         action_edit_gt = QAction("修改GT标签", self)  # GT编辑项
         action_edit_pred = QAction("修改预测标签", self)  # 预测编辑项
         action_edit_gt.triggered.connect(self._edit_selected_face_gt_label)  # 绑定GT编辑
         action_edit_pred.triggered.connect(self._edit_selected_face_pred_label)  # 绑定预测编辑
-        menu.addAction(action_edit_gt)  # 添加GT项
-        menu.addAction(action_edit_pred)  # 添加预测项
+        if show_locate and target in ("gt", "pred"):
+            action_locate_face = QAction("定位面", self)  # 定位项
+            action_locate_face.triggered.connect(lambda _checked=False, t=target: self._locate_selected_face(t))
+            menu.addAction(action_locate_face)
+            menu.addSeparator()
+        if target == "gt":
+            menu.addAction(action_edit_gt)  # GT视口仅显示GT编辑
+        elif target == "pred":
+            menu.addAction(action_edit_pred)  # Prediction视口仅显示预测编辑
+        else:
+            menu.addAction(action_edit_gt)  # 添加GT项
+            menu.addAction(action_edit_pred)  # 添加预测项
         menu.exec_(global_pos)  # 弹出菜单
 
+    def _locate_selected_face(self, target: str):
+        selected_face_indices = self._get_selection(target)
+        if not selected_face_indices:
+            self.msgBox.warning(self, "警告", "请先选中一个或多个面")
+            return
+        face_idx = min(selected_face_indices)  # 多选时按最小编号定位
+        self._center_face_in_view(target, face_idx)
+
+    def _center_face_in_view(self, target: str, face_idx: int):
+        if face_idx < 0 or face_idx >= len(self.faces_list):
+            return
+        display = self.gt_display if target == "gt" else self.pred_display
+        if display is None:
+            return
+
+        face_obj = self.faces_list[face_idx]
+        try:
+            bbox = Bnd_Box()
+            brepbndlib_Add(face_obj, bbox)
+            xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+            center = gp_Pnt(
+                0.5 * (xmin + xmax),
+                0.5 * (ymin + ymax),
+                0.5 * (zmin + zmax),
+            )
+
+            camera = display.View.Camera()
+            if hasattr(camera, "SetCenter"):
+                camera.SetCenter(center)
+                normal = self._face_normal(face_obj)
+                if normal is not None:
+                    view_distance = camera.Eye().Distance(camera.Center())
+                    if view_distance <= 1e-6:
+                        view_distance = max(xmax - xmin, ymax - ymin, zmax - zmin, 1.0)
+
+                    eye = gp_Pnt(
+                        center.X() + normal.X() * view_distance,
+                        center.Y() + normal.Y() * view_distance,
+                        center.Z() + normal.Z() * view_distance,
+                    )
+                    camera.SetEye(eye)
+
+                    fallback_up = gp_Dir(0.0, 0.0, 1.0)
+                    if abs(normal.Dot(fallback_up)) > 0.95:
+                        fallback_up = gp_Dir(1.0, 0.0, 0.0)
+                    up_vec = gp_Vec(fallback_up)
+                    proj_len = up_vec.Dot(gp_Vec(normal))
+                    up_vec = up_vec - gp_Vec(normal).Multiplied(proj_len)
+                    if up_vec.Magnitude() > 1e-9:
+                        camera.SetUp(gp_Dir(up_vec))
+                display.View.SetCamera(camera)
+                display.View.Redraw()
+            else:
+                display.FitAll()
+        except Exception:
+            try:
+                display.FitAll()
+            except Exception:
+                pass
+
+    def _face_normal(self, face_obj) -> Optional[gp_Dir]:
+        try:
+            u_min, u_max, v_min, v_max = breptools_UVBounds(face_obj)
+            u_mid = 0.5 * (u_min + u_max)
+            v_mid = 0.5 * (v_min + v_max)
+
+            surface_adaptor = BRepAdaptor_Surface(face_obj, True)
+            surface_handle = surface_adaptor.Surface().Surface()
+            sl_props = GeomLProp_SLProps(surface_handle, u_mid, v_mid, 1, 1e-6)
+            if not sl_props.IsNormalDefined():
+                return None
+
+            normal = sl_props.Normal()
+            if face_obj.Orientation() == TopAbs_REVERSED:
+                normal.Reverse()
+            return normal
+        except Exception:
+            return None
+
     def _edit_selected_face_gt_label(self):
-        if not self.selected_face_indices:  # 未选中面
+        if not self.selected_face_indices_gt:  # 未选中面
             self.msgBox.warning(self, "警告", "请先选中一个或多个面")  # 提示
             return  # 直接返回
         if not self.label_dir:  # 未选择标签目录
@@ -1100,7 +1442,7 @@ class App(QDialog):  # 主界面
             self.current_gt_labels = labels  # 缓存
 
         options, option_map = self._label_options()  # 选项
-        first_face_idx = self.selected_face_indices[0]
+        first_face_idx = self.selected_face_indices_gt[0]
         current_label = self.current_gt_labels[first_face_idx]  # 当前标签（以第一个选中面为准）
         current_text = option_map.get(current_label, options[0])  # 默认项
         current_index = options.index(current_text) if current_text in options else 0
@@ -1117,10 +1459,10 @@ class App(QDialog):  # 主界面
             return  # 取消
 
         new_label = int(selected_text.split(":", 1)[0])  # 解析标签
-        self._apply_multi_label_change("gt", self.selected_face_indices, new_label, record_history=True)  # 批量更新并记录
+        self._apply_multi_label_change("gt", self.selected_face_indices_gt, new_label, record_history=True)  # 批量更新并记录
 
     def _edit_selected_face_pred_label(self):
-        if not self.selected_face_indices:  # 未选中面
+        if not self.selected_face_indices_pred:  # 未选中面
             self.msgBox.warning(self, "警告", "请先选中一个或多个面")  # 提示
             return  # 直接返回
 
@@ -1129,7 +1471,7 @@ class App(QDialog):  # 主界面
             return  # 直接返回
 
         options, option_map = self._label_options_for_labels(self.current_pred_labels)  # 选项
-        first_face_idx = self.selected_face_indices[0]
+        first_face_idx = self.selected_face_indices_pred[0]
         current_label = self.current_pred_labels[first_face_idx]  # 当前标签（以第一个选中面为准）
         current_text = option_map.get(current_label, options[0])  # 默认项
         current_index = options.index(current_text) if current_text in options else 0
@@ -1146,7 +1488,7 @@ class App(QDialog):  # 主界面
             return  # 取消
 
         new_label = int(selected_text.split(":", 1)[0])  # 解析标签
-        self._apply_multi_label_change("pred", self.selected_face_indices, new_label, record_history=True)  # 批量更新并记录
+        self._apply_multi_label_change("pred", self.selected_face_indices_pred, new_label, record_history=True)  # 批量更新并记录
 
     def _apply_multi_label_change(self, target: str, face_indices: List[int], new_label: int, record_history: bool):
         unique_face_indices = sorted({idx for idx in face_indices if 0 <= idx < len(self.faces_list)})
@@ -1230,6 +1572,11 @@ class App(QDialog):  # 主界面
         if not self.undo_stack:
             return
         op = self.undo_stack.pop()
+        if op.get("op") == "selection":
+            target = op.get("selection_target", "pred")
+            self._set_selection(target, op.get("old_selection", []), record_history=False)
+            self.redo_stack.append(op)
+            return
         if "face_indices" in op and "old_labels" in op:
             for face_idx, old_label in zip(op["face_indices"], op["old_labels"]):
                 self._apply_single_label_change(
@@ -1252,6 +1599,11 @@ class App(QDialog):  # 主界面
         if not self.redo_stack:
             return
         op = self.redo_stack.pop()
+        if op.get("op") == "selection":
+            target = op.get("selection_target", "pred")
+            self._set_selection(target, op.get("new_selection", []), record_history=False)
+            self.undo_stack.append(op)
+            return
         if "face_indices" in op and "new_label" in op:
             self._apply_multi_label_change(
                 target=op["target"],
@@ -1372,61 +1724,27 @@ class App(QDialog):  # 主界面
     def _apply_gt_labels_from_labels(self, labels: List[int]):
         if not self.gt_ais_shape:
             return
-        self.gt_ais_shape.ClearCustomAspects()  # 清除自定义颜色
         class_to_faces_map: Dict[int, List[int]] = {}  # 类别到面索引映射
         for face_idx, class_idx in enumerate(labels):  # 遍历标签
             class_to_faces_map.setdefault(class_idx, []).append(face_idx)  # 归类
-            face_obj = self.faces_list[face_idx]  # 获取面
-            color = self._class_color(class_idx)  # 颜色
-            self.gt_ais_shape.SetCustomColor(face_obj, rgb_color(*color))  # 设置颜色
-            self.gt_ais_shape.SetCustomTransparency(face_obj, 0.0)  # 设置不透明
-
-        self._apply_selection_overlay_to_shape(self.gt_ais_shape)  # 叠加选中高亮
-
-        self.gt_display.Context.Display(self.gt_ais_shape, True)  # 刷新显示
         self._populate_gt_feature_list(class_to_faces_map)  # 更新GT特征列表
+        self._apply_selection_coloring_for_view("gt")  # 仅给选中面按GT分类着色
 
     def _apply_pred_labels_from_labels(self, labels: List[int]):
         if not self.pred_ais_shape:
             return
-        self.pred_ais_shape.ClearCustomAspects()  # 清除自定义颜色
         class_to_faces_map: Dict[int, List[int]] = {}  # 类别到面索引映射
         for face_idx, class_idx in enumerate(labels):  # 遍历标签
             class_to_faces_map.setdefault(class_idx, []).append(face_idx)  # 归类
-            face_obj = self.faces_list[face_idx]  # 获取面
-            color = self._class_color(class_idx)  # 颜色
-            self.pred_ais_shape.SetCustomColor(face_obj, rgb_color(*color))  # 设置颜色
-            self.pred_ais_shape.SetCustomTransparency(face_obj, 0.0)  # 设置不透明
-
-        self._apply_selection_overlay_to_shape(self.pred_ais_shape)  # 叠加选中高亮
-
-        self.pred_display.Context.Display(self.pred_ais_shape, True)  # 刷新显示
         self._populate_pred_feature_list(class_to_faces_map)  # 更新预测特征列表
+        self._apply_selection_coloring_for_view("pred")  # 仅给选中面按预测分类着色
 
     def _refresh_selection_colors(self):
-        if self.gt_enabled and self.current_gt_labels:  # 有GT颜色
-            self._apply_gt_labels_from_labels(self.current_gt_labels)  # 刷新GT
-        elif self.gt_ais_shape:
-            self.gt_ais_shape.ClearCustomAspects()  # 清除GT颜色
-            self._apply_selection_overlay_to_shape(self.gt_ais_shape)  # 仅高亮选中
-            self.gt_display.Context.Display(self.gt_ais_shape, True)  # 刷新GT显示
-
-        if self.current_pred_labels and self.pred_ais_shape:  # 有预测颜色
-            self._apply_pred_labels_from_labels(self.current_pred_labels)  # 刷新预测
-        elif self.pred_ais_shape:
-            self.pred_ais_shape.ClearCustomAspects()  # 清除Prediction颜色
-            self._apply_selection_overlay_to_shape(self.pred_ais_shape)  # 仅高亮选中
-            self.pred_display.Context.Display(self.pred_ais_shape, True)  # 刷新Prediction显示
+        self._apply_selection_coloring_for_view("gt")
+        self._apply_selection_coloring_for_view("pred")
 
     def _apply_selection_overlay_to_shape(self, ais_shape):
-        if not self.selected_face_indices:  # 无选中
-            return  # 直接返回
-        for face_idx in self.selected_face_indices:  # 当前选中面
-            if not (0 <= face_idx < len(self.faces_list)):  # 越界保护
-                continue
-            face_obj = self.faces_list[face_idx]  # 获取面
-            ais_shape.SetCustomColor(face_obj, rgb_color(1.0, 1.0, 0.0))  # 高亮颜色
-            ais_shape.SetCustomTransparency(face_obj, 0.0)  # 不透明
+        return
 
     def _update_label_dict(self, label_dict: dict, labels: List[int]) -> dict:
         if "seg" in label_dict:
@@ -1469,9 +1787,9 @@ class App(QDialog):  # 主界面
 
     def stepListItemClicked(self):
         row = self.stepListWidget.currentRow()  # 获取选中行
-        if row < 0 or row >= len(self.step_files):  # 越界保护
+        if row < 0 or row >= len(self.displayed_step_files):  # 越界保护
             return  # 直接返回
-        self._load_step_file(self.step_files[row])  # 加载选中的STEP
+        self._load_step_file(self.displayed_step_files[row])  # 加载选中的STEP
 
     def _scan_step_files(self, step_dir: Path) -> List[Path]:
         if not step_dir.exists():  # 目录不存在
@@ -1483,15 +1801,51 @@ class App(QDialog):  # 主界面
     def _populate_step_list(self):
         if not hasattr(self, "stepListWidget"):  # 列表未创建
             return  # 直接返回
+
+        if self.step_sort_mode == "confidence_desc":
+            sorted_files = sorted(
+                self.step_files,
+                key=lambda p: (
+                    -self.step_avg_confidence_by_path.get(str(p), -1.0),
+                    p.name.lower(),
+                ),
+            )
+        elif self.step_sort_mode == "confidence_asc":
+            sorted_files = sorted(
+                self.step_files,
+                key=lambda p: (
+                    self.step_avg_confidence_by_path.get(str(p), float("inf")),
+                    p.name.lower(),
+                ),
+            )
+        else:
+            sorted_files = sorted(self.step_files, key=lambda p: p.name.lower())
+
+        self.displayed_step_files = sorted_files
         self.stepListWidget.clear()  # 清空列表
-        for step_path in self.step_files:  # 遍历文件
-            self.stepListWidget.addItem(step_path.name)  # 添加文件名
+        for step_path in self.displayed_step_files:  # 遍历文件
+            confidence = self.step_avg_confidence_by_path.get(str(step_path))
+            if confidence is None:
+                self.stepListWidget.addItem(step_path.name)  # 无置信度时仅显示名称
+            else:
+                self.stepListWidget.addItem(f"{step_path.name} | conf={confidence:.4f}")  # 显示均值置信度
 
         if self.last_step_file:  # 若存在上次选择
-            for idx, step_path in enumerate(self.step_files):  # 查找匹配项
+            for idx, step_path in enumerate(self.displayed_step_files):  # 查找匹配项
                 if step_path == self.last_step_file:  # 路径一致
                     self.stepListWidget.setCurrentRow(idx)  # 选中
                     break
+
+    def _on_step_sort_changed(self):
+        if not hasattr(self, "stepSortCombo"):
+            return
+        if self.stepSortCombo.currentIndex() == 1:
+            self.step_sort_mode = "confidence_desc"
+        elif self.stepSortCombo.currentIndex() == 2:
+            self.step_sort_mode = "confidence_asc"
+        else:
+            self.step_sort_mode = "name"
+        self._populate_step_list()
 
     def _restore_step_list(self):
         if self.step_dir and not self.step_files:  # 有目录但无列表
