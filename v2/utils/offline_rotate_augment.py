@@ -14,6 +14,15 @@ def parse_splits(value: str) -> List[str]:
     return [s.strip() for s in value.split(",") if s.strip()]
 
 
+def parse_bool(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
 RotationSpec = Tuple[str, float, Rotation]
 
 
@@ -101,6 +110,16 @@ def ensure_empty_dir(path: Path, overwrite: bool) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+def merge_ids_keep_order(existing_ids: List[str], new_ids: List[str]) -> List[str]:
+    seen = set(existing_ids)
+    merged = list(existing_ids)
+    for item in new_ids:
+        if item not in seen:
+            merged.append(item)
+            seen.add(item)
+    return merged
+
+
 def copy_if_exists(src: Path, dst: Path) -> None:
     if not src.exists():
         return
@@ -118,16 +137,18 @@ def augment_one_file(
     with open(graph_path, "r", encoding="utf-8") as f:
         fn, data = json.load(f)
 
+    label_path = label_dir / f"{fn}.json"
+    if not label_path.exists():
+        return []
+
     out_ids: List[str] = []
 
     if copy_original:
         out_graph_path = out_aag_dir / f"{fn}.json"
         out_graph_path.write_text(json.dumps([fn, data]), encoding="utf-8")
 
-        label_path = label_dir / f"{fn}.json"
-        if label_path.exists():
-            out_label_path = out_label_dir / f"{fn}.json"
-            out_label_path.write_bytes(label_path.read_bytes())
+        out_label_path = out_label_dir / f"{fn}.json"
+        out_label_path.write_bytes(label_path.read_bytes())
 
         out_ids.append(fn)
 
@@ -152,10 +173,8 @@ def augment_one_file(
         out_graph_path = out_aag_dir / f"{new_fn}.json"
         out_graph_path.write_text(json.dumps([new_fn, new_data]), encoding="utf-8")
 
-        label_path = label_dir / f"{fn}.json"
-        if label_path.exists():
-            out_label_path = out_label_dir / f"{new_fn}.json"
-            out_label_path.write_bytes(label_path.read_bytes())
+        out_label_path = out_label_dir / f"{new_fn}.json"
+        out_label_path.write_bytes(label_path.read_bytes())
 
         out_ids.append(new_fn)
 
@@ -175,7 +194,19 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--copy-original", action="store_true", default=True)
     parser.add_argument("--no-copy-original", dest="copy_original", action="store_false")
-    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--overwrite",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_bool,
+        help="Whether to overwrite existing output directory. Supports --overwrite or --overwrite true/false.",
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append augmented files/split ids into an existing output directory instead of requiring a fresh one.",
+    )
     parser.add_argument("--prefix", default="graphs_", help="File prefix for numeric ids.")
     parser.add_argument("--index-width", type=int, default=8)
     parser.add_argument("--suffix", default=".json")
@@ -190,7 +221,10 @@ def main() -> None:
     out_aag_dir = output_root / "aag"
     out_label_dir = output_root / "labels"
 
-    ensure_empty_dir(output_root, args.overwrite)
+    if args.append:
+        output_root.mkdir(parents=True, exist_ok=True)
+    else:
+        ensure_empty_dir(output_root, args.overwrite)
     out_aag_dir.mkdir(parents=True, exist_ok=True)
     out_label_dir.mkdir(parents=True, exist_ok=True)
 
@@ -206,7 +240,7 @@ def main() -> None:
     label_dir = input_root / "labels"
 
     for split in split_names:
-        split_file = input_root / f"{split}.txt"
+        split_file = input_root / "split" / f"{split}.txt"
         if not split_file.exists():
             continue
 
@@ -221,6 +255,7 @@ def main() -> None:
         )
 
         new_ids: List[str] = []
+        skipped_no_label = 0
         for graph_path in graph_paths:
             if args.mode == "all":
                 rotations = all_rotations
@@ -239,19 +274,32 @@ def main() -> None:
                     np_rng=np_rng,
                 )
 
-            new_ids.extend(
-                augment_one_file(
-                    graph_path=graph_path,
-                    label_dir=label_dir,
-                    out_aag_dir=out_aag_dir,
-                    out_label_dir=out_label_dir,
-                    rotations=rotations,
-                    copy_original=args.copy_original,
-                )
+            generated_ids = augment_one_file(
+                graph_path=graph_path,
+                label_dir=label_dir,
+                out_aag_dir=out_aag_dir,
+                out_label_dir=out_label_dir,
+                rotations=rotations,
+                copy_original=args.copy_original,
             )
+            if not generated_ids:
+                skipped_no_label += 1
+                continue
+            new_ids.extend(generated_ids)
 
-        out_split_file = output_root / f"{split}.txt"
-        save_split_ids(out_split_file, new_ids)
+        out_split_dir = output_root / "split"
+        out_split_dir.mkdir(parents=True, exist_ok=True)
+        out_split_file = out_split_dir / f"{split}.txt"
+        if args.append and out_split_file.exists():
+            existing_ids = load_split_ids(out_split_file)
+            merged_ids = merge_ids_keep_order(existing_ids, new_ids)
+            save_split_ids(out_split_file, merged_ids)
+        else:
+            save_split_ids(out_split_file, new_ids)
+
+        print(
+            f"[split={split}] input_graphs={len(graph_paths)} generated_ids={len(new_ids)} skipped_no_label={skipped_no_label}"
+        )
 
 
 if __name__ == "__main__":

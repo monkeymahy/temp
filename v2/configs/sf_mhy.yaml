@@ -27,7 +27,7 @@ trainer:
         monitor: val_seg_acc_avg
         mode: max
         save_top_k: 1
-        dirpath: .\v2\output\checkpoints\train_aug_12_enhanced
+        dirpath: .\v2\output\checkpoints\train_aug_16
         filename: "{epoch}-{val_seg_acc_avg:.2f}"
         save_last: true
     
@@ -64,7 +64,7 @@ model:
   n_epochs: 200
 
 data:
-  root_dir: .\v2\data\SFCAD_12
+  root_dir: .\v2\data\SFCAD16
   normalize: False
   center_and_scale: true
   random_rotate: False
