@@ -128,37 +128,39 @@ class MFCAD2Dataset(Dataset):
         if not hasattr(self, "lut"):
             # 根据映射关系创建查找表
             # 映射规则：0:other, 1:hole, 2:slot
-            self.lut = np.asarray(
-                [
-                    0,
-                    1,
-                    0,
-                    0,
-                    0,
-                    2,
-                    2,
-                    2,
-                    0,
-                    0,
-                    0,
-                    0,
-                    1,
-                    0,
-                    0,
-                    0,
-                    0,
-                    2,
-                    2,
-                    2,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                ],
-                dtype=np.int32,
-            )
+            # self.lut = np.asarray(
+            #     [
+            #         0,
+            #         1,
+            #         0,
+            #         0,
+            #         0,
+            #         2,
+            #         2,
+            #         2,
+            #         0,
+            #         0,
+            #         0,
+            #         0,
+            #         1,
+            #         0,
+            #         0,
+            #         0,
+            #         0,
+            #         2,
+            #         2,
+            #         2,
+            #         0,
+            #         0,
+            #         0,
+            #         0,
+            #         0,
+            #         0,
+            #     ],
+            #     dtype=np.int32,
+            # )
+            # 恒等映射：
+            self.lut = np.arange(25, dtype=np.int32)  # 25类别的恒等映射查找表
 
         return self.lut  # 返回常量中的标签映射字典
 

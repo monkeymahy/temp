@@ -8,8 +8,10 @@ SF-JSON/
 SF-JSON/SF-JSON/
 v2/output_MFCAD2/
 v2/output
+v2/qt5_visualization_state.json
 # 本地调试配置(VSCode文件)
 launch.json
 
 # todo 当前阶段无法避免会产生的文件
-config.yaml 
+config.yaml
+v2/data/

@@ -1,4 +1,3 @@
-# seed: 42
 seed_everything: 42
 
 trainer:
@@ -8,14 +7,10 @@ trainer:
   log_every_n_steps: 50
   deterministic: true
   num_sanity_val_steps: 0
-  # limit_train_batches: 5
-  # limit_val_batches: 5
-  # limit_test_batches: 5
   logger:
     class_path: swanlab.integration.pytorch_lightning.SwanLabLogger
     init_args:
       project: AAGNet_PL
-      # logdir: D:\510431\code\aagnet\v2\output\swanlog
       logdir: .\v2\output\swanlog
   callbacks:
     - class_path: v2.callbacks.EMA.EMACallback
@@ -32,20 +27,19 @@ trainer:
         monitor: val_seg_acc_avg
         mode: max
         save_top_k: 1
-        #dirpath: D:\510431\code\aagnet\v2\output\checkpoints
-        dirpath: .\v2\output\checkpoints\pretrain_24_enhanced
+        dirpath: .\v2\output\checkpoints\train_aug_16
         filename: "{epoch}-{val_seg_acc_avg:.2f}"
         save_last: true
-
+    
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_seg_acc_avg
         mode: max
-        patience: 10
+        patience: 20
         min_delta: 0.001
 
 model:
-  num_classes: 25                 
+  num_classes: 6
   arch: AAGNetGraphEncoder
   edge_attr_dim: 12
   node_attr_dim: 10
@@ -68,43 +62,21 @@ model:
   lr: 1e-2
   weight_decay: 1e-2
   n_epochs: 200
-  # use_class_weight: false
-  # class_samples: None
 
 data:
-  root_dir: .\v2\data\MFCAD2
+  root_dir: .\v2\data\SFCAD16
   normalize: False
-  center_and_scale: False
+  center_and_scale: true
   random_rotate: False
   transform: null
   batch_size: 32
-  shuffle: False # TODO need to be deleted in datamodule
   drop_last: False
   num_workers: 4
   prefetch_factor: 4
   label_names:
-    - Chamfer
-    - Through_hole
-    - Triangular_passage
-    - Rectangular_passage
-    - Six_sided_passage
-    - Triangular_through_slot
-    - Rectangular_through_slot
-    - Circular_through_slot
-    - Rectangular_through_step
-    - Two_sided_through_step
-    - Slanted_through_step
-    - O_ring
-    - Blind_hole
-    - Triangular_pocket
-    - Rectangular_pocket
-    - Six_sided_pocket
-    - Circular_end_pocket
-    - Rectangular_blind_slot
-    - Vertical_circular_end_blind_slot
-    - Horizontal_circular_end_blind_slot
-    - Triangular_blind_step
-    - Circular_blind_step
-    - Rectangular_blind_step
-    - Round
-    - Stock
+    - slot groove
+    - pocket
+    - planar
+    - hole
+    - notch_chamfer
+    - other

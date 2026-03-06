@@ -93,7 +93,7 @@ class SFDataset(Dataset):  # 显式继承Dataset，增强兼容性与可读性
             self.stat = load_statistics(stat_path=stat_path)  # 读取统计量到内存
 
         # 读取split对应的id列表（例如：train.txt）
-        split_file = self.root_dir.joinpath(f"{split}.txt")  # split 文件路径
+        split_file = self.root_dir.joinpath("split").joinpath(f"{split}.txt")  # split 文件路径
         split_ids = np.loadtxt(str(split_file), dtype=str)  # 读取所有id（可能为1行或多行）
         split_ids = np.atleast_1d(split_ids).tolist()  # 统一转为list避免单行标量
         split_ids_set = set(split_ids)  # 转为 set，加速后续筛选与查找
