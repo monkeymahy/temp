@@ -502,12 +502,14 @@ class App(QDialog):  # 主界面
         self.gtFeatureListLabel = QLabel("GT标注列表", self)  # GT标注列表标题
         panel_layout.addWidget(self.gtFeatureListLabel, 14, 0, 1, 1)  # 放置标题
         self.gtFeatureListWidget = QListWidget()  # GT特征列表
+        self.gtFeatureListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 支持多类联动选中
         self.gtFeatureListWidget.itemClicked.connect(self.gtFeatureListDoubleClicked)  # 绑定点击事件
         panel_layout.addWidget(self.gtFeatureListWidget, 15, 0, 1, 1)  # 放置列表
 
         self.predFeatureListLabel = QLabel("Prediction标注列表", self)  # Prediction标注列表标题
         panel_layout.addWidget(self.predFeatureListLabel, 16, 0, 1, 1)  # 放置标题
         self.predFeatureListWidget = QListWidget()  # Prediction特征列表
+        self.predFeatureListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 支持多类联动选中
         self.predFeatureListWidget.itemClicked.connect(self.predFeatureListDoubleClicked)  # 绑定点击事件
         panel_layout.addWidget(self.predFeatureListWidget, 17, 0, 1, 1)  # 放置列表
 
@@ -1110,6 +1112,7 @@ class App(QDialog):  # 主界面
             self.pred_features_list.append(FeatureClass(name=class_name, faces=face_indices))  # 保存聚合结果
             self.pred_class_index_by_row.append(class_idx)  # 记录行到类别的映射
             self.predFeatureListWidget.addItem(f"{class_name} ({len(face_indices)})")  # 更新列表显示
+        self._sync_feature_list_selection_from_state("pred")  # 根据当前面选择同步类别选择
 
     def _populate_gt_feature_list(self, class_to_faces_map: Dict[int, List[int]]):
         self.gtFeatureListWidget.clear()  # 清空GT列表控件
@@ -1121,6 +1124,7 @@ class App(QDialog):  # 主界面
             self.gt_features_list.append(FeatureClass(name=class_name, faces=face_indices))  # 保存聚合结果
             self.gt_class_index_by_row.append(class_idx)  # 记录行到类别的映射
             self.gtFeatureListWidget.addItem(f"{class_name} ({len(face_indices)})")  # 更新列表显示
+        self._sync_feature_list_selection_from_state("gt")  # 根据当前面选择同步类别选择
 
     def _build_face_index(self):
         self.face_index_by_hash.clear()  # 清空映射
@@ -1245,6 +1249,7 @@ class App(QDialog):  # 主界面
         else:
             self.selected_face_indices_pred = normalized
         self._sync_face_list_selection_from_state(target)
+        self._sync_feature_list_selection_from_state(target)
         self._apply_selection_coloring_for_view(target)
         if record_history:
             self.undo_stack.append(
@@ -1272,6 +1277,38 @@ class App(QDialog):  # 主界面
                 list_widget.setCurrentRow(selected_face_indices[-1])
             else:
                 list_widget.clearSelection()
+        finally:
+            list_widget.blockSignals(False)
+
+    def _sync_feature_list_selection_from_state(self, target: str):
+        if target == "gt":
+            list_widget = self.gtFeatureListWidget
+            labels = self.current_gt_labels if self.gt_enabled else None
+            class_index_by_row = self.gt_class_index_by_row
+        else:
+            list_widget = self.predFeatureListWidget
+            labels = self.current_pred_labels
+            class_index_by_row = self.pred_class_index_by_row
+
+        if list_widget is None:
+            return
+
+        selected_face_indices = self._get_selection(target)
+        selected_classes = set()
+        if labels and len(labels) == len(self.faces_list):
+            for face_idx in selected_face_indices:
+                if 0 <= face_idx < len(labels):
+                    selected_classes.add(int(labels[face_idx]))
+
+        list_widget.blockSignals(True)
+        try:
+            if not selected_classes:
+                list_widget.clearSelection()
+                return
+            for row in range(list_widget.count()):
+                item = list_widget.item(row)
+                class_idx = class_index_by_row[row] if row < len(class_index_by_row) else None
+                item.setSelected(class_idx in selected_classes)
         finally:
             list_widget.blockSignals(False)
 
