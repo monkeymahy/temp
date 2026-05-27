@@ -24,6 +24,11 @@ if __name__ == "__main__":
     # start a new wandb run to track this script
     dataset_name = "MFCAD2"  # option: MFCAD2 MFCAD
     time_str = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
+    label_manifest = os.getenv("LABELS_MANIFEST")
+    if not label_manifest:
+        default_manifest = os.path.join(r"C:\Data\SF-JSON", "labels_train", "latest", "manifest.json")
+        if os.path.exists(default_manifest):
+            label_manifest = default_manifest
     swanlab.init(
         # set the wandb project where this run will be logged
         project="aagnet_" + dataset_name,
@@ -54,6 +59,7 @@ if __name__ == "__main__":
             "dataset": dataset_name,
             # "dataset": r"D:\Projects\AAGNet\training_data\MFCAD2",
             "dataset": r"C:\Data\SF-JSON",
+            "labels_manifest": label_manifest,
             "epochs": 200,  # option: 100e for MFCAD2; 350e for MFCAD
             "lr": 1e-2,
             "weight_decay": 1e-2,
