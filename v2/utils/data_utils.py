@@ -274,3 +274,222 @@ def load_json_or_pkl(json_path: Path) -> Any:  # todo 此函数非常占用内�
     # 若不存在 pkl，则回退读取 json（注意：大文件会慢且占内存）
     with open(json_path, "r", encoding="utf-8") as fp:  # 显式编码更稳健
         return json.load(fp)  # 解析并返回 Python 对象
+
+
+def _is_int_sequence(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    return all(isinstance(item, (int, np.integer)) for item in value)
+
+
+def _labels_from_seg(seg: Any) -> Optional[List[int]]:
+    if isinstance(seg, dict):
+        items = sorted(seg.items(), key=lambda item: int(item[0]))
+        return [int(label) for _, label in items]
+    if isinstance(seg, list):
+        return [int(label) for label in seg]
+    return None
+
+
+def _labels_from_label_dict(label_dict: Dict[str, Any]) -> Optional[List[int]]:
+    if "labels" in label_dict and isinstance(label_dict["labels"], list):
+        return [int(label) for label in label_dict["labels"]]
+    domains = label_dict.get("domains")
+    if isinstance(domains, dict):
+        geometry = domains.get("geometry")
+        if isinstance(geometry, dict):
+            labels = _labels_from_seg(geometry.get("face"))
+            if labels is not None:
+                return labels
+    if "seg" in label_dict:
+        return _labels_from_seg(label_dict["seg"])
+    return None
+
+
+def extract_labels_from_payload(payload: Any) -> Optional[List[int]]:
+    """Return face labels from all label formats used by v2."""
+    if _is_int_sequence(payload):
+        return [int(label) for label in payload]
+    if isinstance(payload, dict):
+        return _labels_from_label_dict(payload)
+    if isinstance(payload, list):
+        if len(payload) == 2 and isinstance(payload[1], dict):
+            return _labels_from_label_dict(payload[1])
+        if payload and isinstance(payload[0], list) and len(payload[0]) == 2:
+            if isinstance(payload[0][1], dict):
+                return _labels_from_label_dict(payload[0][1])
+    return None
+
+
+def normalize_label_payload(label_data: Any) -> Dict[str, Any]:
+    """Normalize raw/list/MFInstSeg/versioned labels into the v2 label payload."""
+    if isinstance(label_data, dict):
+        payload = dict(label_data)
+        labels = extract_labels_from_payload(payload)
+        if labels is not None:
+            payload["labels"] = labels
+            payload.setdefault("labels_base", list(labels))
+        payload.setdefault("version_id", 1)
+        payload.setdefault("versions", [])
+        return payload
+
+    labels = extract_labels_from_payload(label_data)
+    if labels is None:
+        raise ValueError("label payload does not contain face labels")
+    return {
+        "labels": labels,
+        "labels_base": list(labels),
+        "version_id": 1,
+        "versions": [],
+    }
+
+
+def _apply_label_ops(labels: List[int], ops: Any, *, use_new_labels: bool) -> List[int]:
+    if not isinstance(ops, list):
+        return labels
+    updated = list(labels)
+    label_key = "new_labels" if use_new_labels else "old_labels"
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        indices = op.get("indices")
+        values = op.get(label_key)
+        if not isinstance(indices, list) or not isinstance(values, list):
+            continue
+        for idx, value in zip(indices, values):
+            idx_int = int(idx)
+            if 0 <= idx_int < len(updated):
+                updated[idx_int] = int(value)
+    return updated
+
+
+def rollback_payload(payload: Dict[str, Any], target_version_id: int) -> List[int]:
+    """Rebuild labels at a requested version from a normalized label payload."""
+    normalized = normalize_label_payload(payload)
+    current_version_id = int(normalized.get("version_id", 1))
+    target_version_id = int(target_version_id)
+
+    base_labels = normalized.get("labels_base")
+    if isinstance(base_labels, list):
+        labels = [int(label) for label in base_labels]
+    else:
+        labels = [int(label) for label in normalized["labels"]]
+
+    if target_version_id <= 0:
+        return labels
+
+    versions = normalized.get("versions", [])
+    if not isinstance(versions, list):
+        return labels
+
+    for record in sorted(
+        versions,
+        key=lambda item: int(item.get("version_id", 0)) if isinstance(item, dict) else 0,
+    ):
+        if not isinstance(record, dict):
+            continue
+        version_id = int(record.get("version_id", 0))
+        if version_id > target_version_id:
+            break
+        labels = _apply_label_ops(labels, record.get("ops"), use_new_labels=True)
+
+    if target_version_id >= current_version_id and isinstance(normalized.get("labels"), list):
+        return [int(label) for label in normalized["labels"]]
+    return labels
+
+
+def append_label_version(
+    payload: Dict[str, Any],
+    *,
+    author: str,
+    ops: List[Dict[str, Any]],
+    timestamp: str,
+) -> Dict[str, Any]:
+    """Append a version record after an in-memory label edit."""
+    normalized = normalize_label_payload(payload)
+    versions = normalized.setdefault("versions", [])
+    if not isinstance(versions, list):
+        versions = []
+        normalized["versions"] = versions
+    next_version_id = int(normalized.get("version_id", 1)) + 1
+    versions.append(
+        {
+            "version_id": next_version_id,
+            "timestamp": timestamp,
+            "author": author,
+            "ops": ops,
+        }
+    )
+    normalized["version_id"] = next_version_id
+    payload.clear()
+    payload.update(normalized)
+    return payload
+
+
+def _contains_label_files(path: Path) -> bool:
+    return path.exists() and path.is_dir() and (
+        any(path.glob("*.json")) or any(path.glob("*.pkl"))
+    )
+
+
+def _latest_export_dir(labels_train_dir: Path) -> Optional[Path]:
+    if not labels_train_dir.exists() or not labels_train_dir.is_dir():
+        return None
+    candidates = []
+    for child in labels_train_dir.iterdir():
+        if not child.is_dir():
+            continue
+        label_child = child / "labels"
+        if _contains_label_files(label_child):
+            candidates.append(child)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path.stat().st_mtime, path.name))
+
+
+def resolve_training_label_dir(root_dir: Path, label_dir: str = "labels") -> Path:
+    """Resolve the label directory without changing existing config shape."""
+    if not isinstance(root_dir, Path):
+        root_dir = Path(root_dir)
+    if not isinstance(label_dir, str) or not label_dir.strip():
+        raise ValueError("label_dir must be a non-empty string")
+
+    configured = Path(label_dir)
+    if not configured.is_absolute():
+        configured = root_dir / configured
+
+    if label_dir == "labels":
+        latest_root_export = _latest_export_dir(root_dir / "labels_train")
+        if latest_root_export is not None:
+            return latest_root_export / "labels"
+
+    if _contains_label_files(configured):
+        return configured
+
+    configured_labels = configured / "labels"
+    if _contains_label_files(configured_labels):
+        return configured_labels
+
+    latest_configured_export = _latest_export_dir(configured)
+    if latest_configured_export is not None:
+        return latest_configured_export / "labels"
+
+    return configured
+
+
+def resolve_label_file(label_root: Path, sample_id: str) -> Path:
+    """Resolve a label file for one sample, accepting json or pkl."""
+    label_root = Path(label_root)
+    sample_id = str(sample_id)
+    for suffix in (".json", ".pkl"):
+        exact = label_root / f"{sample_id}{suffix}"
+        if exact.exists():
+            return exact
+    for suffix in (".json", ".pkl"):
+        candidates = sorted(
+            label_root.glob(f"{sample_id}*{suffix}"),
+            key=lambda path: (len(path.stem), path.name.lower()),
+        )
+        if candidates:
+            return candidates[0]
+    return label_root / f"{sample_id}.json"

@@ -2,16 +2,101 @@ import argparse
 import json
 import random
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from data_utils import filter_filenames_by_ids_9s
-
 
 def parse_splits(value: str) -> List[str]:
     return [s.strip() for s in value.split(",") if s.strip()]
+
+
+def filter_filenames_by_ids_9s(
+    filenames: List[Path],
+    ids: Iterable[str],
+    index_width: int = 8,
+    prefix: str = "graphs_",
+    suffix: str = ".json",
+) -> List[Path]:
+    name_to_path = {path.name: path for path in filenames}
+
+    def id_to_filename(value: str) -> str:
+        sample_id = str(value).strip()
+        if sample_id.endswith(suffix):
+            return sample_id
+        if sample_id.startswith(prefix):
+            return f"{sample_id}{suffix}"
+        if sample_id.isdigit():
+            return f"{prefix}{sample_id.zfill(index_width)}{suffix}"
+        return f"{sample_id}{suffix}"
+
+    selected: List[Path] = []
+    missing: List[str] = []
+    for sample_id in sorted(set(ids), key=lambda item: str(item)):
+        filename = id_to_filename(sample_id)
+        path = name_to_path.get(filename)
+        if path is None:
+            missing.append(str(sample_id))
+        else:
+            selected.append(path)
+    print(f">>> Missing {len(missing)} ids in graph filenames, examples: {missing[:10]}")
+    return selected
+
+
+def contains_label_files(path: Path) -> bool:
+    return path.exists() and path.is_dir() and (
+        any(path.glob("*.json")) or any(path.glob("*.pkl"))
+    )
+
+
+def latest_export_dir(labels_train_dir: Path) -> Optional[Path]:
+    if not labels_train_dir.exists() or not labels_train_dir.is_dir():
+        return None
+    candidates = [
+        child
+        for child in labels_train_dir.iterdir()
+        if child.is_dir() and contains_label_files(child / "labels")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path.stat().st_mtime, path.name))
+
+
+def resolve_training_label_dir(root_dir: Path, label_dir: str = "labels") -> Path:
+    configured = Path(label_dir)
+    if not configured.is_absolute():
+        configured = root_dir / configured
+
+    if label_dir == "labels":
+        latest_root_export = latest_export_dir(root_dir / "labels_train")
+        if latest_root_export is not None:
+            return latest_root_export / "labels"
+
+    if contains_label_files(configured):
+        return configured
+    configured_labels = configured / "labels"
+    if contains_label_files(configured_labels):
+        return configured_labels
+    latest_configured_export = latest_export_dir(configured)
+    if latest_configured_export is not None:
+        return latest_configured_export / "labels"
+    return configured
+
+
+def resolve_label_file(label_root: Path, sample_id: str) -> Path:
+    for suffix in (".json", ".pkl"):
+        exact = label_root / f"{sample_id}{suffix}"
+        if exact.exists():
+            return exact
+    for suffix in (".json", ".pkl"):
+        candidates = sorted(
+            label_root.glob(f"{sample_id}*{suffix}"),
+            key=lambda path: (len(path.stem), path.name.lower()),
+        )
+        if candidates:
+            return candidates[0]
+    return label_root / f"{sample_id}.json"
 
 
 def parse_bool(value: str) -> bool:
@@ -123,7 +208,50 @@ def merge_ids_keep_order(existing_ids: List[str], new_ids: List[str]) -> List[st
 def copy_if_exists(src: Path, dst: Path) -> None:
     if not src.exists():
         return
+    dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(src.read_bytes())
+
+
+def resolve_output_label_dir(input_root: Path, output_root: Path, label_dir: Path) -> Path:
+    try:
+        rel_label_dir = label_dir.relative_to(input_root)
+    except ValueError:
+        return output_root / "labels"
+    if rel_label_dir.parts[:1] == ("labels_train",):
+        return output_root / rel_label_dir
+    return output_root / "labels"
+
+
+def copy_label_file(src: Path, out_label_dir: Path, sample_id: str) -> None:
+    out_label_path = out_label_dir / f"{sample_id}{src.suffix}"
+    out_label_path.write_bytes(src.read_bytes())
+
+
+def build_label_train_manifest(input_root: Path, output_root: Path, label_dir: Path, sample_ids: List[str]) -> None:
+    try:
+        rel_label_dir = label_dir.relative_to(input_root)
+    except ValueError:
+        return
+    if len(rel_label_dir.parts) < 3 or rel_label_dir.parts[0] != "labels_train":
+        return
+    export_root = label_dir.parent
+    out_export_root = output_root / "labels_train" / rel_label_dir.parts[1]
+    source_manifest = export_root / "manifest.json"
+    manifest = {
+        "export_id": rel_label_dir.parts[1],
+        "augmented_from_label_dir": str(label_dir),
+        "source_manifest": str(source_manifest) if source_manifest.exists() else None,
+        "count": len(sample_ids),
+        "items": [
+            {
+                "sample_id": sample_id,
+                "label_path": str(out_export_root / "labels" / f"{sample_id}.json"),
+            }
+            for sample_id in sample_ids
+        ],
+    }
+    with open(out_export_root / "manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=True, indent=2)
 
 
 def augment_one_file(
@@ -137,7 +265,7 @@ def augment_one_file(
     with open(graph_path, "r", encoding="utf-8") as f:
         fn, data = json.load(f)
 
-    label_path = label_dir / f"{fn}.json"
+    label_path = resolve_label_file(label_dir, fn)
     if not label_path.exists():
         return []
 
@@ -147,8 +275,7 @@ def augment_one_file(
         out_graph_path = out_aag_dir / f"{fn}.json"
         out_graph_path.write_text(json.dumps([fn, data]), encoding="utf-8")
 
-        out_label_path = out_label_dir / f"{fn}.json"
-        out_label_path.write_bytes(label_path.read_bytes())
+        copy_label_file(label_path, out_label_dir, fn)
 
         out_ids.append(fn)
 
@@ -173,8 +300,7 @@ def augment_one_file(
         out_graph_path = out_aag_dir / f"{new_fn}.json"
         out_graph_path.write_text(json.dumps([new_fn, new_data]), encoding="utf-8")
 
-        out_label_path = out_label_dir / f"{new_fn}.json"
-        out_label_path.write_bytes(label_path.read_bytes())
+        copy_label_file(label_path, out_label_dir, new_fn)
 
         out_ids.append(new_fn)
 
@@ -183,8 +309,9 @@ def augment_one_file(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Offline rotation augmentation for SF AAG data.")
-    parser.add_argument("--input-root", required=True, help="Dataset root directory (has aag/ and labels/).")
+    parser.add_argument("--input-root", required=True, help="Dataset root directory (has aag/ and labels or labels_train/).")
     parser.add_argument("--output-root", required=True, help="Output directory for augmented dataset.")
+    parser.add_argument("--label-dir", default="labels", help="Training label directory name/path. Keeps old config shape.")
     parser.add_argument("--splits", default="train", help="Comma-separated list: train,val,test")
     parser.add_argument("--mode", choices=["random-angle", "discrete", "all"], default="random-angle")
     parser.add_argument("--num-aug", type=int, default=3, help="Number of rotations per sample (random-angle/discrete).")
@@ -218,8 +345,12 @@ def main() -> None:
     if input_root.resolve() == output_root.resolve():
         raise ValueError("input_root and output_root must be different to avoid overwriting.")
 
+    label_dir = resolve_training_label_dir(input_root, args.label_dir)
+    if not label_dir.exists():
+        raise FileNotFoundError(f"training label dir not found: {label_dir}")
+
     out_aag_dir = output_root / "aag"
-    out_label_dir = output_root / "labels"
+    out_label_dir = resolve_output_label_dir(input_root, output_root, label_dir)
 
     if args.append:
         output_root.mkdir(parents=True, exist_ok=True)
@@ -237,7 +368,10 @@ def main() -> None:
     np_rng = np.random.default_rng(args.seed)
 
     aag_dir = input_root / "aag"
-    label_dir = input_root / "labels"
+    print(f">>> Using label dir: {label_dir}")
+    print(f">>> Writing label dir: {out_label_dir}")
+
+    all_generated_ids: List[str] = []
 
     for split in split_names:
         split_file = input_root / "split" / f"{split}.txt"
@@ -286,6 +420,7 @@ def main() -> None:
                 skipped_no_label += 1
                 continue
             new_ids.extend(generated_ids)
+            all_generated_ids.extend(generated_ids)
 
         out_split_dir = output_root / "split"
         out_split_dir.mkdir(parents=True, exist_ok=True)
@@ -300,6 +435,8 @@ def main() -> None:
         print(
             f"[split={split}] input_graphs={len(graph_paths)} generated_ids={len(new_ids)} skipped_no_label={skipped_no_label}"
         )
+
+    build_label_train_manifest(input_root, output_root, label_dir, all_generated_ids)
 
 
 if __name__ == "__main__":

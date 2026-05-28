@@ -18,6 +18,12 @@ from v2.utils.data_utils import load_one_graph, load_statistics
 from v2.utils.data_utils import standardization, center_and_scale
 from v2.utils.data_utils import get_random_rotation, rotate_uvgrid
 from v2.utils.data_utils import filter_filenames_by_ids_9s
+from v2.utils.data_utils import (
+    extract_labels_from_payload,
+    load_json_or_pkl,
+    resolve_label_file,
+    resolve_training_label_dir,
+)
 
 from torch.utils.data import Dataset
 
@@ -216,6 +222,10 @@ class MFCAD2Dataset(Dataset):
         self.use_3category = use_3category
         self.use_9category = use_9category
         self.label_names = label_names
+        self.label_root = resolve_training_label_dir(self.root_dir, "labels")
+        if not self.label_root.exists():
+            raise FileNotFoundError(f"label dir not found: {self.label_root}")
+        print(f">>> Using label dir: {self.label_root}")
 
         # 1. 扫描所有图结构数据文件，已经分割后的
         #  - self.filenames: 存储所有找到的JSON文件的完整路径列表，如 [Path("E:/AAGnetV2/MFCAD2/aag/1.json"), ...]
@@ -295,11 +305,12 @@ class MFCAD2Dataset(Dataset):
         # 使用base class方法加载图
         sample = load_one_graph(fn=fn, data=data)
         # 加载标签并存储为节点数据
-        label_file = self.root_dir.joinpath("labels").joinpath(fn + ".json")
-        with open(str(label_file), "r") as read_file:
-            labels_data = json.load(read_file)
-
-        labels_np = np.asarray(labels_data, dtype=np.int32)  # 转为 int32 的 numpy 数组（更省内存）
+        label_file = resolve_label_file(self.label_root, fn)
+        label_data = load_json_or_pkl(label_file)
+        labels = extract_labels_from_payload(label_data)
+        if labels is None:
+            raise ValueError(f"label payload does not contain face labels: {label_file}")
+        labels_np = np.asarray(labels, dtype=np.int32)
         labels_np = self.label_mapping()[labels_np]  # NOTE `如果使用6类，注释掉这行`
 
         sample["graph"].ndata["y"] = torch.tensor(labels_np).long()
