@@ -59,6 +59,12 @@ def _resolve_label_path(labels_full_dir: Path, entry: Dict[str, Any], sample_id:
     return json_path
 
 
+def _as_train_label_list(labels: Any, sample_id: str) -> List[int]:
+    if not isinstance(labels, list):
+        raise ValueError(f"labels for sample {sample_id} must be a list")
+    return [int(label) for label in labels]
+
+
 def export_labels(
     *,
     labels_full_dir: Path,
@@ -114,19 +120,18 @@ def export_labels(
         if labels is None:
             raise ValueError(f"labels missing for sample {sample_id}")
 
-        out_payload = normalize_label_payload({"labels": labels, "version_id": target_version_id})
-        out_payload["export_id"] = export_id
-        out_payload["source_label_path"] = str(label_path)
+        out_labels = _as_train_label_list(labels, sample_id)
 
         out_path = labels_dir / f"{sample_id}.json"
         with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(out_payload, f, ensure_ascii=True, indent=2)
+            json.dump(out_labels, f, ensure_ascii=True, indent=2)
 
         exported_items.append(
             {
                 "sample_id": sample_id,
                 "version_id": target_version_id,
                 "label_path": str(out_path),
+                "source_label_path": str(label_path),
             }
         )
 
