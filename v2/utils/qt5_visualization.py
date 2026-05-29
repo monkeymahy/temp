@@ -2316,7 +2316,6 @@ class App(QDialog):  # 主界面
         instances: Optional[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         payload = {
-            "schema_version": 2,
             "labels": [int(x) for x in labels],
             "labels_base": [int(x) for x in labels],
             "version_id": 1,

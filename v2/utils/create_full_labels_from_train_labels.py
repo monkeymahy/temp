@@ -74,7 +74,6 @@ def build_full_label_payload(
 ) -> Dict[str, Any]:
     labels = [int(label) for label in labels]
     payload = {
-        "schema_version": 2,
         "sample_id": sample_id,
         "labels": labels,
         "labels_base": list(labels),

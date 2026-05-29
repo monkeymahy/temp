@@ -11,7 +11,6 @@ v2 当前支持两类标签：
 
 ```json
 {
-  "schema_version": 2,
   "sample_id": "graphs_00000001",
   "labels": [0, 1, 1, 0],
   "labels_base": [0, 1, 1, 0],
