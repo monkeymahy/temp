@@ -545,10 +545,10 @@ class App(QDialog):  # 主界面
         gt_version_btns = QWidget(self)
         gt_version_btns_layout = QHBoxLayout()
         gt_version_btns_layout.setContentsMargins(0, 0, 0, 0)
-        self.btn_load_gt_version = QPushButton("加载版本", self)
-        self.btn_load_gt_version.clicked.connect(lambda: self._load_selected_gt_version(rollback=False))
-        self.btn_rollback_gt_version = QPushButton("回滚保存", self)
-        self.btn_rollback_gt_version.clicked.connect(lambda: self._load_selected_gt_version(rollback=True))
+        self.btn_load_gt_version = QPushButton("保存GT修改", self)
+        self.btn_load_gt_version.clicked.connect(self._save_gt_session_changes)
+        self.btn_rollback_gt_version = QPushButton("回滚为新版本", self)
+        self.btn_rollback_gt_version.clicked.connect(self._rollback_selected_gt_version_as_new)
         gt_version_btns_layout.addWidget(self.btn_load_gt_version)
         gt_version_btns_layout.addWidget(self.btn_rollback_gt_version)
         gt_version_btns.setLayout(gt_version_btns_layout)
@@ -1120,6 +1120,8 @@ class App(QDialog):  # 主界面
             self.msgBox.warning(self, "警告", "请先加载标签文件夹")  # 提示
             return  # 直接返回
 
+        if self.gt_session_dirty:
+            self._commit_gt_session_changes()
         self.gt_enabled = not self.gt_enabled  # 切换开关
         self._update_gt_button_text()  # 更新按钮文字
 
@@ -1363,6 +1365,8 @@ class App(QDialog):  # 主界面
         item = self._selected_gt_version_item()
         if not item:
             return
+        if self.gt_session_dirty and not self.gt_version_preview_active:
+            self._commit_gt_session_changes()
         labels = self._get_labels_for_version_item(item)
         if labels is None or len(labels) != len(self.faces_list):
             return
@@ -1429,25 +1433,8 @@ class App(QDialog):  # 主界面
             return
         instance_payload = self._get_instance_for_version_item(item)
         if rollback:
-            ops = self._build_ops_from_label_arrays(
-                old_labels=self.current_gt_labels,
-                new_labels=labels,
-            )
-            ops.extend(
-                self._build_ops_from_instance_arrays(
-                    old_face_instance=self.current_gt_face_instance or [],
-                    new_face_instance=instance_payload.get("face_instance", []),
-                    old_instances=self.current_gt_instances,
-                    new_instances=instance_payload.get("instances", []),
-                )
-            )
-            if not ops:
-                return
-            self.current_gt_labels = list(labels)
-            self.current_gt_face_instance = list(instance_payload.get("face_instance", []))
-            self.current_gt_instances = list(instance_payload.get("instances", []))
-            self._save_gt_labels(self.current_gt_labels, append_version=False)
-            self._update_gt_session_dirty()
+            self._rollback_selected_gt_version_as_new()
+            return
         else:
             self.current_gt_labels = list(labels)
             self.current_gt_face_instance = list(instance_payload.get("face_instance", []))
@@ -1455,6 +1442,48 @@ class App(QDialog):  # 主界面
             self.gt_version_preview_active = True
         if self.gt_enabled:
             self._apply_gt_labels_from_labels(self.current_gt_labels)
+
+    def _save_gt_session_changes(self):
+        if self._commit_gt_session_changes():
+            self.msgBox.information(self, "提示", "GT修改已保存为新版本")
+        else:
+            self.msgBox.information(self, "提示", "当前没有需要保存的GT修改")
+
+    def _rollback_selected_gt_version_as_new(self):
+        if self.current_gt_labels is None or not isinstance(self.gt_label_data, dict):
+            self.msgBox.warning(self, "警告", "请先加载GT标签")
+            return
+        item = self._selected_gt_version_item()
+        if not item:
+            return
+        if item.get("kind") == "current":
+            self.msgBox.information(self, "提示", "当前版本无需回滚")
+            return
+        labels = self._get_labels_for_version_item(item)
+        if labels is None or len(labels) != len(self.faces_list):
+            self.msgBox.warning(self, "警告", "无法解析所选历史版本")
+            return
+        instance_payload = self._get_instance_for_version_item(item)
+        current_item = {"kind": "current", "version_id": None}
+        current_labels = self._get_labels_for_version_item(current_item)
+        current_instance = self._get_instance_for_version_item(current_item)
+        if current_labels is None:
+            self.msgBox.warning(self, "警告", "无法解析当前版本")
+            return
+        self.gt_session_base_labels = list(current_labels)
+        self.gt_session_base_face_instance = list(current_instance.get("face_instance", []))
+        self.gt_session_base_instances = [dict(item) for item in current_instance.get("instances", [])]
+        self.current_gt_labels = list(labels)
+        self.current_gt_face_instance = list(instance_payload.get("face_instance", []))
+        self.current_gt_instances = [dict(item) for item in instance_payload.get("instances", [])]
+        self.gt_version_preview_active = False
+        self._update_gt_session_dirty()
+        if self.gt_enabled:
+            self._apply_gt_labels_from_labels(self.current_gt_labels)
+        if self._commit_gt_session_changes():
+            self.msgBox.information(self, "提示", "历史版本已回滚并保存为新版本")
+        else:
+            self.msgBox.information(self, "提示", "所选历史版本与当前版本一致，无需保存")
 
     def _populate_pred_feature_list(self, class_to_faces_map: Dict[int, List[int]]):
         self.predFeatureListWidget.clear()  # 清空Prediction列表控件
@@ -1739,6 +1768,10 @@ class App(QDialog):  # 主界面
                     self._sync_view_from_to("pred", "gt")  # 同步Prediction到GT
         return super().eventFilter(obj, event)
 
+    def closeEvent(self, event):
+        self._commit_gt_session_changes()
+        super().closeEvent(event)
+
     def _sync_view_from_to(self, source: str, target: str):
         if self.view_sync_lock:  # 防止重入
             return
@@ -1894,6 +1927,7 @@ class App(QDialog):  # 主界面
         self,
         new_face_instance: List[int],
         new_instances: Optional[List[Dict[str, Any]]] = None,
+        record_history: bool = True,
     ):
         if not self._ensure_gt_instance_state():
             return
@@ -1917,12 +1951,27 @@ class App(QDialog):  # 主界面
         if errors:
             self.msgBox.warning(self, "警告", "实例标签不一致: " + "; ".join(errors[:3]))
             return
+        if (
+            old_face_instance == instance_payload["face_instance"]
+            and old_instances == instance_payload["instances"]
+        ):
+            return
         self.current_gt_face_instance = instance_payload["face_instance"]
         self.current_gt_instances = instance_payload["instances"]
-        self._save_gt_labels(self.current_gt_labels or [], append_version=False)
         self._update_gt_session_dirty()
         if self.gt_enabled:
             self._apply_gt_labels_from_labels(self.current_gt_labels or [])
+        if record_history:
+            self.undo_stack.append(
+                {
+                    "op": "gt_instance_state",
+                    "old_face_instance": old_face_instance,
+                    "old_instances": old_instances,
+                    "new_face_instance": list(self.current_gt_face_instance or []),
+                    "new_instances": [dict(item) for item in self.current_gt_instances],
+                }
+            )
+            self.redo_stack.clear()
 
     def _create_gt_instance_from_selection(self):
         if not self._ensure_gt_instance_state() or not self.selected_face_indices_gt:
@@ -2038,7 +2087,7 @@ class App(QDialog):  # 主界面
         if target_faces:
             reply = QMessageBox.question(self, "同步面标签", "是否同步修改该实例内face语义标签？")
             if reply == QMessageBox.Yes:
-                self._apply_gt_label_change_batch(target_faces, [new_class for _ in target_faces])
+                self._apply_multi_label_change("gt", target_faces, new_class, record_history=True)
         self._apply_gt_instance_state(list(self.current_gt_face_instance or []), new_instances)
 
     def _edit_selected_face_gt_label(self):
@@ -2203,6 +2252,14 @@ class App(QDialog):  # 主界面
             self._set_selection(target, op.get("old_selection", []), record_history=False)
             self.redo_stack.append(op)
             return
+        if op.get("op") == "gt_instance_state":
+            self._apply_gt_instance_state(
+                op.get("old_face_instance", []),
+                op.get("old_instances", []),
+                record_history=False,
+            )
+            self.redo_stack.append(op)
+            return
         if "face_indices" in op and "old_labels" in op:
             if op.get("target") == "gt":
                 self._apply_gt_label_change_batch(
@@ -2240,6 +2297,14 @@ class App(QDialog):  # 主界面
         if op.get("op") == "selection":
             target = op.get("selection_target", "pred")
             self._set_selection(target, op.get("new_selection", []), record_history=False)
+            self.undo_stack.append(op)
+            return
+        if op.get("op") == "gt_instance_state":
+            self._apply_gt_instance_state(
+                op.get("new_face_instance", []),
+                op.get("new_instances", []),
+                record_history=False,
+            )
             self.undo_stack.append(op)
             return
         if "face_indices" in op and "new_label" in op:
@@ -2452,9 +2517,9 @@ class App(QDialog):  # 主界面
         labels: List[int],
         ops: Optional[List[Dict[str, int]]] = None,
         append_version: bool = True,
-    ):
+    ) -> bool:
         if not self.gt_label_path or not self.gt_label_format:
-            return
+            return False
         if self.gt_label_format == "versioned" and isinstance(self.gt_label_data, dict):
             payload = self.gt_label_data
             payload["labels"] = [int(x) for x in labels]
@@ -2483,10 +2548,12 @@ class App(QDialog):  # 主界面
             else:
                 with open(self.gt_label_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=True, indent=2)
-        except Exception:
-            return
+        except Exception as exc:
+            self.msgBox.warning(self, "警告", f"GT标签保存失败: {exc}")
+            return False
 
         self._refresh_gt_version_list()
+        return True
 
     def _apply_gt_label_change_batch(self, indices: List[int], new_labels: List[int]):
         if self.current_gt_labels is None:
@@ -2513,7 +2580,6 @@ class App(QDialog):  # 主界面
             applied_new_labels.append(int(new_label))
         if not updated_indices:
             return
-        self._save_gt_labels(self.current_gt_labels, append_version=False)
         self._update_gt_session_dirty()
         if self.gt_enabled:
             self._apply_gt_labels_from_labels(self.current_gt_labels)
@@ -2592,16 +2658,16 @@ class App(QDialog):  # 主界面
         )
         self.gt_session_dirty = labels_changed or self._gt_instance_state_changed()
 
-    def _commit_gt_session_changes(self):
+    def _commit_gt_session_changes(self) -> bool:
         if not self.gt_session_dirty:
-            return
+            return False
         if (
             self.current_gt_labels is None
             or self.gt_session_base_labels is None
             or not isinstance(self.gt_label_data, dict)
         ):
             self.gt_session_dirty = False
-            return
+            return False
         ops = self._build_ops_from_label_arrays(
             old_labels=self.gt_session_base_labels,
             new_labels=self.current_gt_labels,
@@ -2616,12 +2682,15 @@ class App(QDialog):  # 主界面
         )
         if not ops:
             self.gt_session_dirty = False
-            return
-        self._save_gt_labels(self.current_gt_labels, ops=ops, append_version=True)
+            return False
+        if not self._save_gt_labels(self.current_gt_labels, ops=ops, append_version=True):
+            return False
         self.gt_session_base_labels = list(self.current_gt_labels)
         self.gt_session_base_face_instance = list(self.current_gt_face_instance or [])
         self.gt_session_base_instances = [dict(item) for item in self.current_gt_instances]
         self.gt_session_dirty = False
+        self.gt_version_preview_active = False
+        return True
 
     def stepListItemClicked(self):
         row = self.stepListWidget.currentRow()  # 获取选中行

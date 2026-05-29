@@ -178,7 +178,9 @@ python v2\utils\offline_rotate_augment.py --input-root C:\Data\SF-JSON --output-
 - 按实例 ID 或语义类别着色。
 - GT / Prediction 实例列表展示和点击选面。
 - 新建、加入、移出、合并、拆分实例，以及修改实例类别。
-- 保存时将本次会话修改追加到 `versions`，支持 face label 和 instance label 一起回放。
+- GT 编辑先进入内存和撤销/重做栈，不实时落盘。
+- 点击 `保存GT修改`、切换 STEP、关闭窗口、清空模型或切换 GT 显示状态时，将本次会话修改追加到 `versions`。
+- 点击版本列表即可预览历史版本；`回滚为新版本` 会按约定生成新的版本记录。
 
 推荐流程是：先用模型或 MFInstSeg 标签生成 `labels_full`，在可视化工具中检查和修订，再导出 `labels_train/<export_id>` 训练快照。若手上只有 MFInstSeg 原始标签，必须先运行 `create_full_labels_from_train_labels.py` 转换，不能直接把原始标签目录作为可视化 GT 标签目录。
 
