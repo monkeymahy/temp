@@ -125,50 +125,76 @@ def convert_labels(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     items: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, str]] = []
     for label_path in label_files:
-        sample_id, labels, instance_payload, source_format = load_train_label(
-            label_path,
-            background_labels=background_labels,
-        )
-        payload = build_full_label_payload(
-            labels,
-            sample_id=sample_id,
-            source_path=label_path,
-            author=author,
-            source_format=source_format,
-            instance_payload=instance_payload,
-        )
+        try:
+            sample_id, labels, instance_payload, source_format = load_train_label(
+                label_path,
+                background_labels=background_labels,
+            )
+            payload = build_full_label_payload(
+                labels,
+                sample_id=sample_id,
+                source_path=label_path,
+                author=author,
+                source_format=source_format,
+                instance_payload=instance_payload,
+            )
 
-        out_path = output_dir / f"{sample_id}.json"
-        if out_path.exists() and not overwrite:
-            raise FileExistsError(f"output label exists: {out_path}")
+            out_path = output_dir / f"{sample_id}.json"
+            if out_path.exists() and not overwrite:
+                raise FileExistsError(f"output label exists: {out_path}")
 
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=True, indent=2)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=True, indent=2)
 
-        items.append(
-            {
-                "sample_id": sample_id,
-                "source_label_path": str(label_path),
-                "label_path": str(out_path),
-                "version_id": 1,
-                "num_faces": len(labels),
-                "source_format": source_format,
-            }
-        )
+            items.append(
+                {
+                    "sample_id": sample_id,
+                    "source_label_path": str(label_path),
+                    "label_path": str(out_path),
+                    "version_id": 1,
+                    "num_faces": len(labels),
+                    "source_format": source_format,
+                }
+            )
+        except Exception as exc:
+            skipped.append(
+                {
+                    "source_label_path": str(label_path),
+                    "reason": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
+            print(f"[skip] {label_path}: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     manifest = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         "source_labels_dir": str(labels_dir),
         "labels_full_dir": str(output_dir),
         "count": len(items),
+        "skipped_count": len(skipped),
         "items": items,
+        "skipped": skipped,
     }
     manifest_path = output_dir / "manifest.json"
-    if manifest_path.exists() and not overwrite:
-        raise FileExistsError(f"output manifest exists: {manifest_path}")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=True, indent=2)
+    report_path = output_dir / "conversion_report.json"
+    try:
+        if manifest_path.exists() and not overwrite:
+            raise FileExistsError(f"output manifest exists: {manifest_path}")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=True, indent=2)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=True, indent=2)
+    except Exception as exc:
+        print(f"[report-error] failed to write conversion report: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(json.dumps(manifest, ensure_ascii=True, indent=2), file=sys.stderr)
+        return
+
+    print(
+        f"Converted {len(items)} label files, skipped {len(skipped)}. "
+        f"Report: {report_path}"
+    )
 
 
 def _parse_args() -> argparse.Namespace:

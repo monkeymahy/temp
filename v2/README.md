@@ -76,6 +76,8 @@ python v2\utils\create_full_labels_from_train_labels.py ^
 - 若输入带 `inst`，脚本会生成 `domains.instance` 和 `domains.instance_base`。
 - 历史 MFInstSeg 标签里如果有 `bottom`，该字段会被忽略。
 - 输出文件名优先使用 MFInstSeg 内层 `sample_id`。
+- 单个文件读取、解析、转换或写入失败时会跳过并继续处理其他文件。
+- 转换结束会在输出目录写入 `manifest.json` 和 `conversion_report.json`，其中 `skipped` 会记录失败文件、错误类型和原因。
 
 ### 2.2 从完整标签导出训练快照
 
