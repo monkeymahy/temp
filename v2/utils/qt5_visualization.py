@@ -822,16 +822,22 @@ class App(QDialog):  # 主界面
 
         with torch.no_grad():
             try:
-                segmentation_logits = self.recognizer(input_graph)
+                model_outputs = self.recognizer(input_graph)
             except Exception as e:
                 return None, None, f"推理失败 ({step_path.name}): {e}"
+            if isinstance(model_outputs, dict):
+                segmentation_logits = model_outputs.get("seg_logits")
+                if segmentation_logits is None:
+                    return None, None, f"推理失败 ({step_path.name}): 模型未返回seg_logits"
+            else:
+                segmentation_logits = model_outputs
 
             probabilities = torch.softmax(segmentation_logits, dim=1)
             max_probabilities, predicted_classes = torch.max(probabilities, dim=1)
             avg_confidence = float(max_probabilities.mean().item()) if max_probabilities.numel() > 0 else 0.0
             labels = predicted_classes.cpu().tolist()
 
-        del input_graph, segmentation_logits, probabilities, max_probabilities, predicted_classes
+        del input_graph, model_outputs, segmentation_logits, probabilities, max_probabilities, predicted_classes
         return labels, avg_confidence, None
 
     def batchFeatureRecog(self):

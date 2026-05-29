@@ -1,10 +1,33 @@
 import torch
 from torch import nn
 import lightning.pytorch as L
-from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
+from torch.nn.utils.rnn import pad_sequence
+from torchmetrics.classification import (
+    BinaryAccuracy,
+    BinaryF1Score,
+    MulticlassAccuracy,
+    MulticlassJaccardIndex,
+)
 
 import models.encoders as encoders
 from .layers import MLP
+
+
+class InnerProductDecoder(nn.Module):
+    """按图拆分节点特征后计算每个样本内部的同实例 logits。"""
+
+    def __init__(self, wq: nn.Module, wk: nn.Module) -> None:
+        super().__init__()
+        self.wq = wq
+        self.wk = wk
+
+    def forward(self, batched_graph, batched_h):
+        batch_num_nodes = batched_graph.batch_num_nodes().tolist()
+        hidden_list = torch.split(batched_h, batch_num_nodes, dim=0)
+        padded_hidden = pad_sequence(hidden_list, batch_first=True)
+        q = self.wq(padded_hidden)
+        k = self.wk(padded_hidden)
+        return torch.bmm(q, k.transpose(1, 2))
 
 
 ###############################################################################
@@ -57,6 +80,8 @@ class AAGNetSegmentor(L.LightningModule):
         lr=1e-4,
         weight_decay=0,
         n_epochs=200,
+        enable_inst_head=False,
+        inst_loss_weight=1.0,
     ):
         """
         Initialize the AAG-Net solid face segmentation model
@@ -94,10 +119,13 @@ class AAGNetSegmentor(L.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.n_epochs = n_epochs
+        self.enable_inst_head = enable_inst_head
+        self.inst_loss_weight = float(inst_loss_weight)
 
         # 损失函数：使用交叉熵损失函数
         # 适用于多分类任务，自动处理类别不平衡问题
         self.seg_loss = nn.CrossEntropyLoss()
+        self.inst_loss = nn.BCEWithLogitsLoss(reduction="none")
 
         # 节点(面)属性编码器：将输入的面属性映射到嵌入空间
         # 包含线性层和层归一化，用于提取面属性的特征表示
@@ -194,6 +222,28 @@ class AAGNetSegmentor(L.LightningModule):
             act=nn.Mish,  # 激活函数
         )
 
+        self.inst_head = None
+        if self.enable_inst_head:
+            wq = MLP(
+                num_layers=2,
+                input_dim=final_out_emb,
+                hidden_dim=head_hidden_dim,
+                output_dim=head_hidden_dim,
+                norm=nn.LayerNorm,
+                last_norm=True,
+                act=nn.Mish,
+            )
+            wk = MLP(
+                num_layers=2,
+                input_dim=final_out_emb,
+                hidden_dim=head_hidden_dim,
+                output_dim=head_hidden_dim,
+                norm=nn.LayerNorm,
+                last_norm=True,
+                act=nn.Mish,
+            )
+            self.inst_head = InnerProductDecoder(wq, wk)
+
         # 初始化评估指标
         # 为训练集、验证集和测试集分别初始化准确率和IOU指标
         self._init_metrics(num_classes=num_classes)
@@ -259,20 +309,16 @@ class AAGNetSegmentor(L.LightningModule):
             num_classes=num_classes,
             average=None,  # 返回每个类的IOU
         )
+        if self.enable_inst_head:
+            self.tra_inst_acc = BinaryAccuracy()
+            self.tra_inst_f1 = BinaryF1Score()
+            self.val_inst_acc = BinaryAccuracy()
+            self.val_inst_f1 = BinaryF1Score()
+            self.tst_inst_acc = BinaryAccuracy()
+            self.tst_inst_f1 = BinaryF1Score()
 
-    def forward(self, batched_graph):
-        """
-        Forward pass 前向传播
-
-        Args:
-            batched_graph (dgl.Graph): 批量DGL图数据，其中包含：
-                - 节点特征 (ndata['x']): 面属性
-                - 节点网格 (ndata['grid']): 面的2D UV网格
-                - 边特征 (edata['x']): 边属性
-
-        Returns:
-            torch.tensor: 每个面的分类logits (total_nodes_in_batch x num_classes)
-        """
+    def _encode_graph(self, batched_graph):
+        """编码图并返回每个节点拼接全局上下文后的特征。"""
         # 获取输入特征
         # 根据配置决定是否使用面属性
         input_node_attr = (
@@ -313,13 +359,86 @@ class AAGNetSegmentor(L.LightningModule):
 
         # 拼接局部节点嵌入和全局图嵌入
         # 结合局部特征和全局上下文，提高分类性能
-        local_global_feat = torch.cat((node_emb, graph_emb), dim=1)
+        return torch.cat((node_emb, graph_emb), dim=1)
+
+    def _forward_outputs(self, batched_graph):
+        local_global_feat = self._encode_graph(batched_graph)
 
         # 映射到分类logits
         # 通过分割头将嵌入向量映射到类别概率
         seg_out = self.seg_head(local_global_feat)
+        outputs = {"seg_logits": seg_out}
+        if self.enable_inst_head and self.inst_head is not None:
+            outputs["inst_logits"] = self.inst_head(batched_graph, local_global_feat)
+        return outputs
 
-        return seg_out
+    def forward(self, batched_graph):
+        """
+        Forward pass 前向传播。默认保持旧行为：seg-only 模式返回分割logits；
+        开启实例头时返回包含 seg_logits / inst_logits 的字典。
+        """
+        outputs = self._forward_outputs(batched_graph)
+        if self.enable_inst_head:
+            return outputs
+        return outputs["seg_logits"]
+
+    def _compute_step_loss_and_logs(self, batch: dict, stage: str):
+        graphs = batch["graph"]
+        seg_label = graphs.ndata["y"]
+        outputs = self._forward_outputs(batched_graph=graphs)
+        seg_pred = outputs["seg_logits"]
+        loss_seg = self.seg_loss(seg_pred, seg_label)
+        loss = loss_seg
+
+        metric_prefix = {
+            "tra": (self.tra_seg_acc, self.tra_seg_iou, self.tra_seg_acc_per_class, self.tra_seg_iou_per_class),
+            "val": (self.val_seg_acc, self.val_seg_iou, self.val_seg_acc_per_class, self.val_seg_iou_per_class),
+            "tst": (self.tst_seg_acc, self.tst_seg_iou, self.tst_seg_acc_per_class, self.tst_seg_iou_per_class),
+        }
+        seg_acc, seg_iou, seg_acc_per_class_metric, seg_iou_per_class_metric = metric_prefix[stage]
+        seg_acc(seg_pred, seg_label)
+        seg_iou(seg_pred, seg_label)
+        seg_acc_per_class = seg_acc_per_class_metric(seg_pred, seg_label)
+        seg_iou_per_class = seg_iou_per_class_metric(seg_pred, seg_label)
+
+        log_dict = {
+            f"{stage}_loss": loss.item(),
+            f"{stage}_seg_loss": loss_seg.item(),
+            f"{stage}_seg_acc_avg": seg_acc,
+            f"{stage}_seg_iou_avg": seg_iou,
+        }
+
+        if self.enable_inst_head:
+            if "inst_logits" not in outputs:
+                raise ValueError("enable_inst_head=True but model did not return inst_logits")
+            if "inst_labels" not in batch or "inst_mask" not in batch:
+                raise ValueError("seg_inst training requires inst_labels and inst_mask in batch")
+            inst_logits = outputs["inst_logits"]
+            inst_labels = batch["inst_labels"].to(device=inst_logits.device, dtype=inst_logits.dtype)
+            inst_mask = batch["inst_mask"].to(device=inst_logits.device, dtype=inst_logits.dtype)
+            if inst_logits.shape != inst_labels.shape:
+                raise ValueError(
+                    f"inst logits shape {tuple(inst_logits.shape)} != labels {tuple(inst_labels.shape)}"
+                )
+            loss_inst_raw = self.inst_loss(inst_logits, inst_labels)
+            loss_inst = (loss_inst_raw * inst_mask).sum() / inst_mask.sum().clamp_min(1.0)
+            loss = loss + self.inst_loss_weight * loss_inst
+            log_dict[f"{stage}_loss"] = loss.item()
+            log_dict[f"{stage}_inst_loss"] = loss_inst.item()
+
+            valid = inst_mask > 0
+            inst_metric_map = {
+                "tra": (self.tra_inst_acc, self.tra_inst_f1),
+                "val": (self.val_inst_acc, self.val_inst_f1),
+                "tst": (self.tst_inst_acc, self.tst_inst_f1),
+            }
+            inst_acc, inst_f1 = inst_metric_map[stage]
+            inst_acc(inst_logits[valid], inst_labels[valid].long())
+            inst_f1(inst_logits[valid], inst_labels[valid].long())
+            log_dict[f"{stage}_inst_acc"] = inst_acc
+            log_dict[f"{stage}_inst_f1"] = inst_f1
+
+        return loss, seg_label, seg_acc_per_class, seg_iou_per_class, log_dict
 
     def training_step(
         self,
@@ -336,28 +455,10 @@ class AAGNetSegmentor(L.LightningModule):
         Returns:
             torch.tensor: 损失值
         """
-        # 获取图数据和标签
-        graphs = batch["graph"]
-        seg_label = graphs.ndata["y"]  # 每个面的真实标签
-
-        # 前向传播获取预测结果
-        seg_pred = self.forward(batched_graph=graphs)
-
-        # 计算损失
-        loss = self.seg_loss(seg_pred, seg_label)
-
-        # 更新训练指标
-        self.tra_seg_acc(seg_pred, seg_label)
-        self.tra_seg_iou(seg_pred, seg_label)
-        seg_acc_per_class = self.tra_seg_acc_per_class(seg_pred, seg_label)
-        seg_iou_per_class = self.tra_seg_iou_per_class(seg_pred, seg_label)
-
-        # 准备日志数据
-        _dic = {
-            "tra_loss": loss.item(),  # 训练损失
-            "tra_seg_acc_avg": self.tra_seg_acc,  # 平均准确率
-            "tra_seg_iou_avg": self.tra_seg_iou,  # 平均IOU
-        }
+        loss, seg_label, seg_acc_per_class, seg_iou_per_class, _dic = self._compute_step_loss_and_logs(
+            batch=batch,
+            stage="tra",
+        )
         LABEL_NAMES = self.trainer.train_dataloader.dataset.label_names
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"tra_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
@@ -380,28 +481,10 @@ class AAGNetSegmentor(L.LightningModule):
             batch (dict): 包含图数据的批次
             batch_idx (int): 批次索引
         """
-        # 获取图数据和标签
-        graphs = batch["graph"]
-        seg_label = graphs.ndata["y"]  # 每个面的真实标签
-
-        # 前向传播获取预测结果
-        seg_pred = self.forward(batched_graph=graphs)
-
-        # 计算损失
-        loss = self.seg_loss(seg_pred, seg_label)
-
-        # 更新验证指标
-        self.val_seg_acc(seg_pred, seg_label)
-        self.val_seg_iou(seg_pred, seg_label)
-        seg_acc_per_class = self.val_seg_acc_per_class(seg_pred, seg_label)
-        seg_iou_per_class = self.val_seg_iou_per_class(seg_pred, seg_label)
-
-        # 准备日志数据
-        _dic = {
-            "val_loss": loss.item(),  # 验证损失
-            "val_seg_acc_avg": self.val_seg_acc,  # 平均准确率
-            "val_seg_iou_avg": self.val_seg_iou,  # 平均IOU
-        }
+        loss, seg_label, seg_acc_per_class, seg_iou_per_class, _dic = self._compute_step_loss_and_logs(
+            batch=batch,
+            stage="val",
+        )
         LABEL_NAMES = self.trainer.val_dataloaders.dataset.label_names
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"val_seg_acc{i}({LABEL_NAMES[i]})"] = _acc
@@ -422,28 +505,10 @@ class AAGNetSegmentor(L.LightningModule):
             batch (dict): 包含图数据的批次
             batch_idx (int): 批次索引
         """
-        # 获取图数据和标签
-        graphs = batch["graph"]
-        seg_label = graphs.ndata["y"]  # 每个面的真实标签
-
-        # 前向传播获取预测结果
-        seg_pred = self.forward(batched_graph=graphs)
-
-        # 计算损失
-        loss = self.seg_loss(seg_pred, seg_label)
-
-        # 更新测试指标
-        self.tst_seg_acc(seg_pred, seg_label)
-        self.tst_seg_iou(seg_pred, seg_label)
-        seg_acc_per_class = self.tst_seg_acc_per_class(seg_pred, seg_label)
-        seg_iou_per_class = self.tst_seg_iou_per_class(seg_pred, seg_label)
-
-        # 准备日志数据
-        _dic = {
-            "tst_loss": loss.item(),  # 测试损失
-            "tst_seg_acc_avg": self.tst_seg_acc,  # 平均准确率
-            "tst_seg_iou_avg": self.tst_seg_iou,  # 平均IOU
-        }
+        loss, seg_label, seg_acc_per_class, seg_iou_per_class, _dic = self._compute_step_loss_and_logs(
+            batch=batch,
+            stage="tst",
+        )
         LABEL_NAMES = self.trainer.test_dataloaders.dataset.label_names
         for i, (_acc, _iou) in enumerate(zip(seg_acc_per_class, seg_iou_per_class)):
             _dic[f"tst_seg_acc{i}({LABEL_NAMES[i]})"] = _acc

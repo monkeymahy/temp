@@ -22,6 +22,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         num_workers=4,  # 数据加载线程数
         prefetch_factor=4,  # 预取批次数
         label_names=None,  # 类别名称列表
+        task_mode="seg_only",  # 任务模式：seg_only / seg_inst
     ):
         """初始化SF数据模块。"""  # 简要说明
         # 参数校验，确保健壮性
@@ -36,6 +37,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         assert isinstance(num_workers, int) and num_workers >= 0  # num_workers非负整数
         assert isinstance(prefetch_factor, int) and prefetch_factor > 0  # prefetch_factor正整数
         assert isinstance(label_names, list)  # label_names列表类型校验
+        assert isinstance(task_mode, str) and task_mode in ("seg_only", "seg_inst")
 
         super().__init__()  # 初始化父类
 
@@ -53,6 +55,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
         self.prefetch_factor = prefetch_factor  # 预取批次数
         self.pin_memory = True if torch.cuda.is_available() else False  # CUDA时启用pin_memory
         self.label_names = label_names  # 类别名称列表
+        self.task_mode = task_mode  # 任务模式
 
     def setup(self, stage: str = None):  # 按阶段构建数据集
         """根据stage初始化数据集。"""  # 简要说明
@@ -70,6 +73,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
                 random_rotate=self.random_rotate,  # 随机旋转开关
                 transform=self.transform,  # 变换函数
                 label_names=self.label_names,  # 类别名称列表
+                task_mode=self.task_mode,  # 任务模式
             )
             # 验证集
             self.ds_valid = SFDataset(  # 创建验证集
@@ -81,6 +85,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
                 random_rotate=self.random_rotate,  # 随机旋转开关
                 transform=self.transform,  # 变换函数
                 label_names=self.label_names,  # 类别名称列表
+                task_mode=self.task_mode,  # 任务模式
             )
         elif stage == "test":  # 测试阶段
             self.ds_test = SFDataset(  # 创建测试集
@@ -92,6 +97,7 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
                 random_rotate=self.random_rotate,  # 随机旋转开关
                 transform=self.transform,  # 变换函数
                 label_names=self.label_names,  # 类别名称列表
+                task_mode=self.task_mode,  # 任务模式
             )
         else:  # 非法stage
             raise NotImplementedError("仅支持训练/验证阶段的数据加载。")  # 明确错误
@@ -138,10 +144,22 @@ class SFDataModule(L.LightningDataModule):  # Lightning数据模块封装
             drop_last=self.drop_last,  # 是否丢弃不满批
         )
 
-    @staticmethod  # 静态方法：不依赖实例
-    def _collate(batch):  # 自定义批处理函数
+    def _collate(self, batch):  # 自定义批处理函数
         """将样本列表合并为批次。"""  # 简要说明
         batched_graph = dgl.batch([sample["graph"] for sample in batch])  # 合并图  # 取出每个样本的graph
         batched_filenames = [sample["filename"] for sample in batch]  # 收集文件名  # 取出每个样本的filename
 
-        return {"graph": batched_graph, "filename": batched_filenames}  # 返回批次字典
+        result = {"graph": batched_graph, "filename": batched_filenames}  # 返回批次字典
+        if self.task_mode == "seg_inst":
+            num_faces = [sample["inst_y"].shape[0] for sample in batch]
+            max_faces = max(num_faces)
+            inst_labels = torch.zeros(len(batch), max_faces, max_faces, dtype=torch.float32)
+            inst_mask = torch.zeros(len(batch), max_faces, max_faces, dtype=torch.float32)
+            for batch_idx, sample in enumerate(batch):
+                size = sample["inst_y"].shape[0]
+                inst_labels[batch_idx, :size, :size] = sample["inst_y"]
+                inst_mask[batch_idx, :size, :size] = 1.0
+            result["inst_labels"] = inst_labels
+            result["inst_mask"] = inst_mask
+            result["num_faces"] = torch.tensor(num_faces, dtype=torch.long)
+        return result
