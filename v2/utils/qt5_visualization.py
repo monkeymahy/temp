@@ -4,7 +4,7 @@ import os  # 标准库：环境变量与路径
 import sys  # 标准库：模块搜索路径
 import time  # 标准库：计时
 from pathlib import Path  # 标准库：路径对象
-from typing import Dict, List, Optional, Tuple  # 类型标注
+from typing import Any, Dict, List, Optional, Tuple  # 类型标注
 
 project_root = Path(__file__).resolve().parents[2]  # 项目根目录
 if str(project_root) not in sys.path:  # 避免重复追加
@@ -64,6 +64,14 @@ from v2.utils.data_utils import (  # v2数据工具
     append_label_version,  # 版本追加
     rollback_payload,  # 版本回滚
 )
+from v2.utils.instance_label_utils import (
+    build_instance_change_ops,
+    build_instances_from_face_instance,
+    normalize_instance_payload,
+    rollback_instance_payload,
+    validate_instance_struct,
+)
+from v2.utils.instance_postprocess import postprocess_instance_logits
 
 
 class FeatureClass:  # 类别聚合信息
@@ -110,6 +118,10 @@ class App(QDialog):  # 主界面
         self.selected_face_indices_pred: List[int] = []  # Prediction当前选中面索引列表
         self.current_gt_labels: Optional[List[int]] = None  # 当前GT标签
         self.current_pred_labels: Optional[List[int]] = None  # 当前预测标签
+        self.current_gt_face_instance: Optional[List[int]] = None  # 当前GT实例归属
+        self.current_gt_instances: List[Dict[str, Any]] = []  # 当前GT实例列表
+        self.current_pred_face_instance: Optional[List[int]] = None  # 当前预测实例归属
+        self.current_pred_instances: List[Dict[str, Any]] = []  # 当前预测实例列表
         self.gt_label_path: Optional[Path] = None  # 当前GT文件路径
         self.gt_label_format: Optional[str] = None  # 当前GT格式
         self.gt_label_data = None  # 当前GT原始数据
@@ -137,8 +149,11 @@ class App(QDialog):  # 主界面
         self.label_author = os.getenv("AAGNET_USER") or os.getenv("USERNAME") or "unknown"
         self.gt_version_items: List[Dict[str, Optional[int]]] = []  # GT版本列表条目
         self.gt_session_base_labels: Optional[List[int]] = None  # 本次窗口基准标签
+        self.gt_session_base_face_instance: Optional[List[int]] = None  # 本次窗口实例基准
+        self.gt_session_base_instances: List[Dict[str, Any]] = []  # 本次窗口实例对象基准
         self.gt_session_dirty = False  # 本次窗口是否有修改
         self.gt_version_preview_active = False  # 是否处于版本预览模式
+        self.instance_color_mode = "instance"  # 着色模式：instance / semantic
 
         self.gt_display = None  # GT显示对象
         self.pred_display = None  # Prediction显示对象
@@ -426,6 +441,11 @@ class App(QDialog):  # 主界面
         btn_save_pred.clicked.connect(self.savePredictionLabels)  # 绑定点击事件
         panel_layout.addWidget(btn_save_pred, 11, 0, 1, 1)  # 放置按钮
 
+        self.colorModeCombo = QComboBox(self)
+        self.colorModeCombo.addItems(["实例着色", "语义类别着色"])
+        self.colorModeCombo.currentIndexChanged.connect(self._on_color_mode_changed)
+        panel_layout.addWidget(self.colorModeCombo, 12, 0, 1, 1)
+
         # 创建STEP文件列表头（左标题，右排序）
         self.step_header_widget = QWidget(self)  # STEP列表头容器
         step_header_layout = QHBoxLayout()  # STEP列表头布局
@@ -438,11 +458,11 @@ class App(QDialog):  # 主界面
         step_header_layout.addStretch(1)  # 中间弹性
         step_header_layout.addWidget(self.stepSortCombo)  # 右侧排序
         self.step_header_widget.setLayout(step_header_layout)  # 设置头布局
-        panel_layout.addWidget(self.step_header_widget, 12, 0, 1, 1)  # 放置标题栏
+        panel_layout.addWidget(self.step_header_widget, 13, 0, 1, 1)  # 放置标题栏
 
         self.stepListWidget = QListWidget()  # STEP列表
         self.stepListWidget.itemClicked.connect(self.stepListItemClicked)  # 绑定点击事件
-        panel_layout.addWidget(self.stepListWidget, 13, 0, 1, 1)  # 放置列表
+        panel_layout.addWidget(self.stepListWidget, 14, 0, 1, 1)  # 放置列表
 
         # 创建双视口容器（左GT，右Prediction）
         viewports_container = QWidget()  # 双视口容器
@@ -509,17 +529,17 @@ class App(QDialog):  # 主界面
 
         # 创建GT与Prediction特征列表（上下布局）
         self.gtFeatureListLabel = QLabel("GT标注列表", self)  # GT标注列表标题
-        panel_layout.addWidget(self.gtFeatureListLabel, 14, 0, 1, 1)  # 放置标题
+        panel_layout.addWidget(self.gtFeatureListLabel, 15, 0, 1, 1)  # 放置标题
         self.gtFeatureListWidget = QListWidget()  # GT特征列表
         self.gtFeatureListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 支持多类联动选中
         self.gtFeatureListWidget.itemClicked.connect(self.gtFeatureListDoubleClicked)  # 绑定点击事件
-        panel_layout.addWidget(self.gtFeatureListWidget, 15, 0, 1, 1)  # 放置列表
+        panel_layout.addWidget(self.gtFeatureListWidget, 16, 0, 1, 1)  # 放置列表
 
         self.gtVersionListLabel = QLabel("GT版本列表", self)  # GT版本列表标题
-        panel_layout.addWidget(self.gtVersionListLabel, 16, 0, 1, 1)
+        panel_layout.addWidget(self.gtVersionListLabel, 17, 0, 1, 1)
         self.gtVersionListWidget = QListWidget()  # GT版本列表
         self.gtVersionListWidget.itemClicked.connect(self._on_gt_version_selected)
-        panel_layout.addWidget(self.gtVersionListWidget, 17, 0, 1, 1)
+        panel_layout.addWidget(self.gtVersionListWidget, 18, 0, 1, 1)
 
         gt_version_btns = QWidget(self)
         gt_version_btns_layout = QHBoxLayout()
@@ -531,14 +551,14 @@ class App(QDialog):  # 主界面
         gt_version_btns_layout.addWidget(self.btn_load_gt_version)
         gt_version_btns_layout.addWidget(self.btn_rollback_gt_version)
         gt_version_btns.setLayout(gt_version_btns_layout)
-        panel_layout.addWidget(gt_version_btns, 18, 0, 1, 1)
+        panel_layout.addWidget(gt_version_btns, 19, 0, 1, 1)
 
         self.predFeatureListLabel = QLabel("Prediction标注列表", self)  # Prediction标注列表标题
-        panel_layout.addWidget(self.predFeatureListLabel, 19, 0, 1, 1)  # 放置标题
+        panel_layout.addWidget(self.predFeatureListLabel, 20, 0, 1, 1)  # 放置标题
         self.predFeatureListWidget = QListWidget()  # Prediction特征列表
         self.predFeatureListWidget.setSelectionMode(QListWidget.ExtendedSelection)  # 支持多类联动选中
         self.predFeatureListWidget.itemClicked.connect(self.predFeatureListDoubleClicked)  # 绑定点击事件
-        panel_layout.addWidget(self.predFeatureListWidget, 20, 0, 1, 1)  # 放置列表
+        panel_layout.addWidget(self.predFeatureListWidget, 21, 0, 1, 1)  # 放置列表
 
         # 应用布局
         self.horizontalGroupBox.setLayout(canvas_layout)  # 设置右侧布局
@@ -642,7 +662,17 @@ class App(QDialog):  # 主界面
         self.pred_features_list.clear()  # 清空Prediction特征聚合数据
         self.gt_class_index_by_row.clear()  # 清空GT索引映射
         self.pred_class_index_by_row.clear()  # 清空Prediction索引映射
+        self.current_gt_labels = None  # 清空GT标签
+        self.current_gt_face_instance = None  # 清空GT实例标签
+        self.current_gt_instances = []  # 清空GT实例列表
         self.current_pred_labels = None  # 清空预测标签
+        self.current_pred_face_instance = None  # 清空预测实例标签
+        self.current_pred_instances = []  # 清空预测实例列表
+        self.gt_session_base_labels = None  # 清空GT窗口基准
+        self.gt_session_base_face_instance = None  # 清空GT实例窗口基准
+        self.gt_session_base_instances = []  # 清空GT实例基准列表
+        self.gt_session_dirty = False  # 清空GT窗口状态
+        self.gt_version_preview_active = False
         self.undo_stack.clear()  # 清空撤销栈
         self.redo_stack.clear()  # 清空重做栈
 
@@ -716,11 +746,17 @@ class App(QDialog):  # 主界面
             if hasattr(self, "gtVersionListWidget"):
                 self.gtVersionListWidget.clear()  # 清空GT版本列表
             self.current_gt_labels = None  # 清空GT标签
+            self.current_gt_face_instance = None  # 清空GT实例标签
+            self.current_gt_instances = []  # 清空GT实例列表
             self.current_pred_labels = None  # 清空预测标签
+            self.current_pred_face_instance = None  # 清空预测实例标签
+            self.current_pred_instances = []  # 清空预测实例列表
             self.gt_label_path = None  # 清空GT路径
             self.gt_label_format = None  # 清空GT格式
             self.gt_label_data = None  # 清空GT数据
             self.gt_session_base_labels = None  # 清空GT窗口基准
+            self.gt_session_base_face_instance = None  # 清空GT实例窗口基准
+            self.gt_session_base_instances = []  # 清空GT实例基准列表
             self.gt_session_dirty = False  # 清空GT窗口状态
             self.gt_version_preview_active = False
             self.pred_label_path = None  # 清空预测保存路径
@@ -736,7 +772,7 @@ class App(QDialog):  # 主界面
             return  # 直接返回
 
         start_time = time.time()  # 开始计时
-        labels, avg_confidence, err = self._predict_step(Path(self.file_name))  # 执行单文件预测
+        labels, avg_confidence, err, instance_payload = self._predict_step(Path(self.file_name))  # 执行单文件预测
         if err:
             self.msgBox.warning(self, "warning", err)  # 提示
             return
@@ -752,6 +788,12 @@ class App(QDialog):  # 主界面
             class_to_faces_map.setdefault(class_idx, []).append(face_idx)  # 聚合同类别的面
 
         self.current_pred_labels = labels  # 缓存预测标签
+        if instance_payload:
+            self.current_pred_face_instance = list(instance_payload.get("face_instance", []))
+            self.current_pred_instances = list(instance_payload.get("instances", []))
+        else:
+            self.current_pred_face_instance = None
+            self.current_pred_instances = []
         self._populate_pred_feature_list(class_to_faces_map)  # 更新预测特征列表
         self._apply_pred_labels_from_labels(self.current_pred_labels)  # 应用预测颜色
 
@@ -788,11 +830,11 @@ class App(QDialog):  # 主界面
                 return payload
         return None
 
-    def _predict_step(self, step_path: Path) -> Tuple[Optional[List[int]], Optional[float], Optional[str]]:
+    def _predict_step(self, step_path: Path) -> Tuple[Optional[List[int]], Optional[float], Optional[str], Optional[Dict[str, Any]]]:
         if not self.attribute_schema:
-            return None, None, "特征schema未加载，请先加载配置"
+            return None, None, "特征schema未加载，请先加载配置", None
         if not self._ensure_model_ready():
-            return None, None, self.model_load_error or "模型未初始化，请先加载配置和权重"
+            return None, None, self.model_load_error or "模型未初始化，请先加载配置和权重", None
 
         step_path_str = str(step_path)
         aag_data = self._load_precomputed_aag_data_for_step(step_path)
@@ -801,16 +843,16 @@ class App(QDialog):  # 主界面
                 aag_extractor = AAGExtractor(step_path_str, self.attribute_schema)
                 aag_data = aag_extractor.process()
             except Exception as e:
-                return None, None, f"AAG提取失败 ({step_path.name}): {e}"
+                return None, None, f"AAG提取失败 ({step_path.name}): {e}", None
 
         try:
             sample_dict = load_one_graph(step_path_str, aag_data)
         except Exception as e:
-            return None, None, f"图构建失败 ({step_path.name}): {e}"
+            return None, None, f"图构建失败 ({step_path.name}): {e}", None
 
         dim_err = self._validate_graph_feature_dims(sample_dict["graph"])
         if dim_err:
-            return None, None, f"输入特征维度与模型配置不匹配 ({step_path.name})：{dim_err}"
+            return None, None, f"输入特征维度与模型配置不匹配 ({step_path.name})：{dim_err}", None
 
         if self.normalize and self.stat is not None:
             sample_dict = standardization(sample_dict, self.stat)
@@ -824,11 +866,23 @@ class App(QDialog):  # 主界面
             try:
                 model_outputs = self.recognizer(input_graph)
             except Exception as e:
-                return None, None, f"推理失败 ({step_path.name}): {e}"
+                return None, None, f"推理失败 ({step_path.name}): {e}", None
+            instance_payload = None
             if isinstance(model_outputs, dict):
                 segmentation_logits = model_outputs.get("seg_logits")
                 if segmentation_logits is None:
-                    return None, None, f"推理失败 ({step_path.name}): 模型未返回seg_logits"
+                    return None, None, f"推理失败 ({step_path.name}): 模型未返回seg_logits", None
+                inst_logits = model_outputs.get("inst_logits")
+                if inst_logits is not None:
+                    try:
+                        instance_payload = postprocess_instance_logits(
+                            inst_logits=inst_logits,
+                            seg_logits=segmentation_logits,
+                            threshold=float(self.data_cfg.get("inst_threshold", 0.5)),
+                            background_labels=set(self.data_cfg.get("background_labels", [0])),
+                        )
+                    except Exception:
+                        instance_payload = None
             else:
                 segmentation_logits = model_outputs
 
@@ -838,7 +892,7 @@ class App(QDialog):  # 主界面
             labels = predicted_classes.cpu().tolist()
 
         del input_graph, model_outputs, segmentation_logits, probabilities, max_probabilities, predicted_classes
-        return labels, avg_confidence, None
+        return labels, avg_confidence, None, instance_payload
 
     def batchFeatureRecog(self):
         if not self.step_files:
@@ -851,7 +905,7 @@ class App(QDialog):  # 主界面
         fail_examples: List[str] = []
 
         for step_path in self.step_files:
-            labels, avg_confidence, err = self._predict_step(step_path)
+            labels, avg_confidence, err, _instance_payload = self._predict_step(step_path)
             if err or labels is None or avg_confidence is None:
                 fail_count += 1
                 if err and len(fail_examples) < 3:
@@ -893,22 +947,45 @@ class App(QDialog):  # 主界面
             ais_shape = self.gt_ais_shape
             display = self.gt_display
             labels = self.current_gt_labels if self.gt_enabled else None
+            face_instance = self.current_gt_face_instance if self.gt_enabled else None
         else:
             ais_shape = self.pred_ais_shape
             display = self.pred_display
             labels = self.current_pred_labels
+            face_instance = self.current_pred_face_instance
 
         if not ais_shape:
             return
 
         self._set_shape_all_gray(ais_shape)
         has_valid_labels = bool(labels) and len(labels) == len(self.faces_list)
+        has_valid_instances = (
+            self.instance_color_mode == "instance"
+            and isinstance(face_instance, list)
+            and len(face_instance) == len(self.faces_list)
+        )
+        if has_valid_instances:
+            for face_idx, instance_id in enumerate(face_instance):
+                instance_id = int(instance_id)
+                if instance_id < 0:
+                    continue
+                face_obj = self.faces_list[face_idx]
+                ais_shape.SetCustomColor(face_obj, rgb_color(*self._instance_color(instance_id)))
+                ais_shape.SetCustomTransparency(face_obj, 0.0)
+        elif has_valid_labels and self.instance_color_mode == "semantic":
+            for face_idx, class_idx in enumerate(labels):
+                face_obj = self.faces_list[face_idx]
+                ais_shape.SetCustomColor(face_obj, rgb_color(*self._class_color(int(class_idx))))
+                ais_shape.SetCustomTransparency(face_obj, 0.0)
+
         selected_face_indices = self._get_selection(target)
         for face_idx in selected_face_indices:
             if not (0 <= face_idx < len(self.faces_list)):
                 continue
             face_obj = self.faces_list[face_idx]
-            if has_valid_labels:
+            if has_valid_instances:
+                color = self._selection_highlight_color()
+            elif has_valid_labels:
                 class_idx = int(labels[face_idx])
                 color = self._class_color(class_idx)
             else:
@@ -931,6 +1008,19 @@ class App(QDialog):  # 主界面
             return (1.0, 1.0, 1.0)  # 默认白色
         hue = (class_idx * 0.61803398875) % 1.0  # 伪随机色相
         return self._hsv_to_rgb(hue, 0.65, 0.95)  # 转RGB
+
+    def _instance_color(self, instance_id: int) -> Tuple[float, float, float]:
+        if instance_id < 0:
+            return self._gray_color()
+        hue = (instance_id * 0.38196601125 + 0.12) % 1.0
+        return self._hsv_to_rgb(hue, 0.7, 0.95)
+
+    def _on_color_mode_changed(self):
+        self.instance_color_mode = "instance" if self.colorModeCombo.currentIndex() == 0 else "semantic"
+        if self.current_gt_labels is not None:
+            self._apply_gt_labels_from_labels(self.current_gt_labels)
+        if self.current_pred_labels is not None:
+            self._apply_pred_labels_from_labels(self.current_pred_labels)
 
     def _hsv_to_rgb(self, h: float, s: float, v: float) -> Tuple[float, float, float]:
         i = int(h * 6.0)  # 色相分段
@@ -1097,11 +1187,20 @@ class App(QDialog):  # 主界面
         labels = extract_labels_from_payload(payload)
         if labels is None:
             return None
+        try:
+            instance_payload = normalize_instance_payload(label_data, num_faces=len(labels), allow_empty=True)
+        except Exception:
+            instance_payload = {"face_instance": [-1 for _ in labels], "instances": []}
         self.gt_label_data = payload  # 记录标准化数据
         self.gt_label_format = "versioned"  # 统一写回版本化格式
+        self.current_gt_face_instance = [int(x) for x in instance_payload.get("face_instance", [])]
+        self.current_gt_instances = list(instance_payload.get("instances", []))
+        self._ensure_payload_instance_fields()
 
         if self.gt_session_base_labels is None or prev_label_path != label_path:
             self.gt_session_base_labels = list(labels)
+            self.gt_session_base_face_instance = list(self.current_gt_face_instance or [])
+            self.gt_session_base_instances = [dict(item) for item in self.current_gt_instances]
             self.gt_session_dirty = False
         self.gt_version_preview_active = False
 
@@ -1159,6 +1258,31 @@ class App(QDialog):  # 主界面
             return "dict"
         return None
 
+    def _ensure_payload_instance_fields(self):
+        if not isinstance(self.gt_label_data, dict):
+            return
+        domains = self.gt_label_data.setdefault("domains", {})
+        if not isinstance(domains, dict):
+            domains = {}
+            self.gt_label_data["domains"] = domains
+        if self.current_gt_face_instance is not None:
+            domains["instance"] = {
+                "face_instance": [int(x) for x in self.current_gt_face_instance],
+                "instances": [dict(item) for item in self.current_gt_instances],
+            }
+        versions = self.gt_label_data.get("versions", [])
+        base = domains.get("instance_base")
+        base_is_empty = (
+            isinstance(base, dict)
+            and not base.get("instances")
+            and all(int(x) < 0 for x in (base.get("face_instance") or []))
+        )
+        if "instance_base" not in domains or (not versions and base_is_empty):
+            domains["instance_base"] = {
+                "face_instance": [int(x) for x in (self.current_gt_face_instance or [])],
+                "instances": [dict(item) for item in self.current_gt_instances],
+            }
+
     def _refresh_gt_version_list(self):
         if not hasattr(self, "gtVersionListWidget"):
             return
@@ -1196,7 +1320,10 @@ class App(QDialog):  # 主界面
         labels = self._get_labels_for_version_item(item)
         if labels is None or len(labels) != len(self.faces_list):
             return
+        instance_payload = self._get_instance_for_version_item(item)
         self.current_gt_labels = list(labels)
+        self.current_gt_face_instance = list(instance_payload.get("face_instance", []))
+        self.current_gt_instances = list(instance_payload.get("instances", []))
         self.gt_version_preview_active = True
         if self.gt_enabled:
             self._apply_gt_labels_from_labels(self.current_gt_labels)
@@ -1208,6 +1335,23 @@ class App(QDialog):  # 主界面
         if row < 0 or row >= len(self.gt_version_items):
             return None
         return self.gt_version_items[row]
+
+    def _get_instance_for_version_item(self, item: Dict[str, Optional[int]]) -> Dict[str, Any]:
+        if not isinstance(self.gt_label_data, dict):
+            return {"face_instance": [], "instances": []}
+        if item.get("kind") == "current":
+            try:
+                return normalize_instance_payload(
+                    self.gt_label_data,
+                    num_faces=len(self.current_gt_labels or []),
+                    allow_empty=True,
+                )
+            except Exception:
+                return {"face_instance": [], "instances": []}
+        version_id = 0 if item.get("kind") == "base" else item.get("version_id")
+        if version_id is None:
+            return {"face_instance": [], "instances": []}
+        return rollback_instance_payload(self.gt_label_data, int(version_id))
 
     def _get_labels_for_version_item(self, item: Dict[str, Optional[int]]) -> Optional[List[int]]:
         if not isinstance(self.gt_label_data, dict):
@@ -1237,18 +1381,31 @@ class App(QDialog):  # 主界面
         if len(labels) != len(self.faces_list):
             self.msgBox.warning(self, "警告", "版本标签数量与面数量不一致")
             return
+        instance_payload = self._get_instance_for_version_item(item)
         if rollback:
             ops = self._build_ops_from_label_arrays(
                 old_labels=self.current_gt_labels,
                 new_labels=labels,
             )
+            ops.extend(
+                self._build_ops_from_instance_arrays(
+                    old_face_instance=self.current_gt_face_instance or [],
+                    new_face_instance=instance_payload.get("face_instance", []),
+                    old_instances=self.current_gt_instances,
+                    new_instances=instance_payload.get("instances", []),
+                )
+            )
             if not ops:
                 return
             self.current_gt_labels = list(labels)
+            self.current_gt_face_instance = list(instance_payload.get("face_instance", []))
+            self.current_gt_instances = list(instance_payload.get("instances", []))
             self._save_gt_labels(self.current_gt_labels, append_version=False)
             self._update_gt_session_dirty()
         else:
             self.current_gt_labels = list(labels)
+            self.current_gt_face_instance = list(instance_payload.get("face_instance", []))
+            self.current_gt_instances = list(instance_payload.get("instances", []))
             self.gt_version_preview_active = True
         if self.gt_enabled:
             self._apply_gt_labels_from_labels(self.current_gt_labels)
@@ -1257,6 +1414,20 @@ class App(QDialog):  # 主界面
         self.predFeatureListWidget.clear()  # 清空Prediction列表控件
         self.pred_features_list.clear()  # 清空Prediction特征聚合列表
         self.pred_class_index_by_row.clear()  # 清空Prediction行索引映射
+        self.predFeatureListLabel.setText("Prediction实例列表" if self._use_instance_list("pred") else "Prediction标注列表")
+
+        if self._use_instance_list("pred"):
+            for instance in self.current_pred_instances:
+                instance_id = int(instance["instance_id"])
+                class_name = self._class_name(int(instance.get("class_id", 0)))
+                face_indices = [int(idx) for idx in instance.get("face_indices", [])]
+                self.pred_features_list.append(
+                    FeatureClass(name=f"inst_{instance_id} {class_name}", faces=face_indices)
+                )
+                self.pred_class_index_by_row.append(instance_id)
+                self.predFeatureListWidget.addItem(f"inst_{instance_id} | {class_name} ({len(face_indices)})")
+            self._sync_feature_list_selection_from_state("pred")
+            return
 
         for class_idx, face_indices in class_to_faces_map.items():  # 遍历类别映射
             class_name = self._class_name(class_idx)  # 获取类别名称
@@ -1269,6 +1440,20 @@ class App(QDialog):  # 主界面
         self.gtFeatureListWidget.clear()  # 清空GT列表控件
         self.gt_features_list.clear()  # 清空GT特征聚合列表
         self.gt_class_index_by_row.clear()  # 清空GT行索引映射
+        self.gtFeatureListLabel.setText("GT实例列表" if self._use_instance_list("gt") else "GT标注列表")
+
+        if self._use_instance_list("gt"):
+            for instance in self.current_gt_instances:
+                instance_id = int(instance["instance_id"])
+                class_name = self._class_name(int(instance.get("class_id", 0)))
+                face_indices = [int(idx) for idx in instance.get("face_indices", [])]
+                self.gt_features_list.append(
+                    FeatureClass(name=f"inst_{instance_id} {class_name}", faces=face_indices)
+                )
+                self.gt_class_index_by_row.append(instance_id)
+                self.gtFeatureListWidget.addItem(f"inst_{instance_id} | {class_name} ({len(face_indices)})")
+            self._sync_feature_list_selection_from_state("gt")
+            return
 
         for class_idx, face_indices in class_to_faces_map.items():  # 遍历类别映射
             class_name = self._class_name(class_idx)  # 获取类别名称
@@ -1276,6 +1461,13 @@ class App(QDialog):  # 主界面
             self.gt_class_index_by_row.append(class_idx)  # 记录行到类别的映射
             self.gtFeatureListWidget.addItem(f"{class_name} ({len(face_indices)})")  # 更新列表显示
         self._sync_feature_list_selection_from_state("gt")  # 根据当前面选择同步类别选择
+
+    def _use_instance_list(self, target: str) -> bool:
+        if self.instance_color_mode != "instance":
+            return False
+        if target == "gt":
+            return bool(self.current_gt_instances)
+        return bool(self.current_pred_instances)
 
     def _build_face_index(self):
         self.face_index_by_hash.clear()  # 清空映射
@@ -1436,30 +1628,38 @@ class App(QDialog):  # 主界面
             list_widget = self.gtFeatureListWidget
             labels = self.current_gt_labels if self.gt_enabled else None
             class_index_by_row = self.gt_class_index_by_row
+            face_instance = self.current_gt_face_instance if self.gt_enabled else None
         else:
             list_widget = self.predFeatureListWidget
             labels = self.current_pred_labels
             class_index_by_row = self.pred_class_index_by_row
+            face_instance = self.current_pred_face_instance
 
         if list_widget is None:
             return
 
         selected_face_indices = self._get_selection(target)
-        selected_classes = set()
-        if labels and len(labels) == len(self.faces_list):
+        selected_keys = set()
+        if self._use_instance_list(target) and isinstance(face_instance, list) and len(face_instance) == len(self.faces_list):
+            for face_idx in selected_face_indices:
+                if 0 <= face_idx < len(face_instance):
+                    instance_id = int(face_instance[face_idx])
+                    if instance_id >= 0:
+                        selected_keys.add(instance_id)
+        elif labels and len(labels) == len(self.faces_list):
             for face_idx in selected_face_indices:
                 if 0 <= face_idx < len(labels):
-                    selected_classes.add(int(labels[face_idx]))
+                    selected_keys.add(int(labels[face_idx]))
 
         list_widget.blockSignals(True)
         try:
-            if not selected_classes:
+            if not selected_keys:
                 list_widget.clearSelection()
                 return
             for row in range(list_widget.count()):
                 item = list_widget.item(row)
                 class_idx = class_index_by_row[row] if row < len(class_index_by_row) else None
-                item.setSelected(class_idx in selected_classes)
+                item.setSelected(class_idx in selected_keys)
         finally:
             list_widget.blockSignals(False)
 
@@ -1514,8 +1714,20 @@ class App(QDialog):  # 主界面
         menu = QMenu(self)  # 右键菜单
         action_edit_gt = QAction("修改GT标签", self)  # GT编辑项
         action_edit_pred = QAction("修改预测标签", self)  # 预测编辑项
+        action_new_inst = QAction("新建实例", self)
+        action_add_inst = QAction("加入实例", self)
+        action_remove_inst = QAction("移出实例", self)
+        action_merge_inst = QAction("合并实例", self)
+        action_split_inst = QAction("拆分实例", self)
+        action_edit_inst_class = QAction("修改实例类别", self)
         action_edit_gt.triggered.connect(self._edit_selected_face_gt_label)  # 绑定GT编辑
         action_edit_pred.triggered.connect(self._edit_selected_face_pred_label)  # 绑定预测编辑
+        action_new_inst.triggered.connect(self._create_gt_instance_from_selection)
+        action_add_inst.triggered.connect(self._add_gt_selection_to_instance)
+        action_remove_inst.triggered.connect(self._remove_gt_selection_from_instance)
+        action_merge_inst.triggered.connect(self._merge_gt_selected_instances)
+        action_split_inst.triggered.connect(self._split_gt_selection_to_new_instance)
+        action_edit_inst_class.triggered.connect(self._edit_gt_selected_instance_class)
         if show_locate and target in ("gt", "pred"):
             action_locate_face = QAction("定位面", self)  # 定位项
             action_locate_face.triggered.connect(lambda _checked=False, t=target: self._locate_selected_face(t))
@@ -1523,6 +1735,13 @@ class App(QDialog):  # 主界面
             menu.addSeparator()
         if target == "gt":
             menu.addAction(action_edit_gt)  # GT视口仅显示GT编辑
+            menu.addSeparator()
+            menu.addAction(action_new_inst)
+            menu.addAction(action_add_inst)
+            menu.addAction(action_remove_inst)
+            menu.addAction(action_merge_inst)
+            menu.addAction(action_split_inst)
+            menu.addAction(action_edit_inst_class)
         elif target == "pred":
             menu.addAction(action_edit_pred)  # Prediction视口仅显示预测编辑
         else:
@@ -1608,6 +1827,173 @@ class App(QDialog):  # 主界面
             return normal
         except Exception:
             return None
+
+    def _ensure_gt_instance_state(self) -> bool:
+        if self.current_gt_labels is None:
+            self.msgBox.warning(self, "警告", "请先加载GT标签")
+            return False
+        if self.current_gt_face_instance is None or len(self.current_gt_face_instance) != len(self.faces_list):
+            self.current_gt_face_instance = [-1 for _ in self.faces_list]
+            self.current_gt_instances = []
+        return True
+
+    def _next_gt_instance_id(self) -> int:
+        ids = [int(item.get("instance_id", -1)) for item in self.current_gt_instances]
+        return max(ids, default=-1) + 1
+
+    def _rebuild_gt_instances(self, face_instance: List[int]) -> List[Dict[str, Any]]:
+        return build_instances_from_face_instance(face_instance, self.current_gt_labels or [])
+
+    def _apply_gt_instance_state(
+        self,
+        new_face_instance: List[int],
+        new_instances: Optional[List[Dict[str, Any]]] = None,
+    ):
+        if not self._ensure_gt_instance_state():
+            return
+        if len(new_face_instance) != len(self.faces_list):
+            self.msgBox.warning(self, "警告", "实例标签数量与面数量不一致")
+            return
+        old_face_instance = list(self.current_gt_face_instance or [])
+        old_instances = [dict(item) for item in self.current_gt_instances]
+        if self.gt_version_preview_active:
+            self.gt_session_base_labels = list(self.current_gt_labels or [])
+            self.gt_session_base_face_instance = list(old_face_instance)
+            self.gt_session_base_instances = [dict(item) for item in old_instances]
+            self.gt_version_preview_active = False
+        if new_instances is None:
+            new_instances = self._rebuild_gt_instances(new_face_instance)
+        instance_payload = {
+            "face_instance": [int(x) for x in new_face_instance],
+            "instances": [dict(item) for item in new_instances],
+        }
+        errors = validate_instance_struct(instance_payload, len(self.faces_list))
+        if errors:
+            self.msgBox.warning(self, "警告", "实例标签不一致: " + "; ".join(errors[:3]))
+            return
+        self.current_gt_face_instance = instance_payload["face_instance"]
+        self.current_gt_instances = instance_payload["instances"]
+        self._save_gt_labels(self.current_gt_labels or [], append_version=False)
+        self._update_gt_session_dirty()
+        if self.gt_enabled:
+            self._apply_gt_labels_from_labels(self.current_gt_labels or [])
+
+    def _create_gt_instance_from_selection(self):
+        if not self._ensure_gt_instance_state() or not self.selected_face_indices_gt:
+            return
+        new_face_instance = list(self.current_gt_face_instance or [])
+        new_id = self._next_gt_instance_id()
+        for face_idx in self.selected_face_indices_gt:
+            if 0 <= face_idx < len(new_face_instance):
+                new_face_instance[face_idx] = new_id
+        self._apply_gt_instance_state(new_face_instance)
+
+    def _instance_options(self) -> Tuple[List[str], Dict[int, int]]:
+        options = []
+        option_map = {}
+        for row, instance in enumerate(self.current_gt_instances):
+            instance_id = int(instance["instance_id"])
+            class_name = self._class_name(int(instance.get("class_id", 0)))
+            text = f"{instance_id}: {class_name} ({len(instance.get('face_indices', []))})"
+            options.append(text)
+            option_map[row] = instance_id
+        return options, option_map
+
+    def _prompt_gt_instance_id(self, title: str) -> Optional[int]:
+        if not self.current_gt_instances:
+            self.msgBox.warning(self, "警告", "当前没有可选实例")
+            return None
+        options, option_map = self._instance_options()
+        selected_text, ok = QInputDialog.getItem(self, title, "选择实例", options, 0, False)
+        if not ok:
+            return None
+        row = options.index(selected_text)
+        return option_map[row]
+
+    def _add_gt_selection_to_instance(self):
+        if not self._ensure_gt_instance_state() or not self.selected_face_indices_gt:
+            return
+        target_id = self._prompt_gt_instance_id("加入实例")
+        if target_id is None:
+            return
+        new_face_instance = list(self.current_gt_face_instance or [])
+        for face_idx in self.selected_face_indices_gt:
+            if 0 <= face_idx < len(new_face_instance):
+                new_face_instance[face_idx] = int(target_id)
+        self._apply_gt_instance_state(new_face_instance)
+
+    def _remove_gt_selection_from_instance(self):
+        if not self._ensure_gt_instance_state() or not self.selected_face_indices_gt:
+            return
+        new_face_instance = list(self.current_gt_face_instance or [])
+        for face_idx in self.selected_face_indices_gt:
+            if 0 <= face_idx < len(new_face_instance):
+                new_face_instance[face_idx] = -1
+        self._apply_gt_instance_state(new_face_instance)
+
+    def _selected_gt_instance_ids(self) -> List[int]:
+        if not self.current_gt_face_instance:
+            return []
+        ids = {
+            int(self.current_gt_face_instance[idx])
+            for idx in self.selected_face_indices_gt
+            if 0 <= idx < len(self.current_gt_face_instance) and int(self.current_gt_face_instance[idx]) >= 0
+        }
+        return sorted(ids)
+
+    def _merge_gt_selected_instances(self):
+        if not self._ensure_gt_instance_state():
+            return
+        ids = self._selected_gt_instance_ids()
+        if len(ids) < 2:
+            self.msgBox.warning(self, "警告", "请选择至少两个实例中的面")
+            return
+        target_id = ids[0]
+        new_face_instance = list(self.current_gt_face_instance or [])
+        for idx, instance_id in enumerate(new_face_instance):
+            if int(instance_id) in ids:
+                new_face_instance[idx] = target_id
+        self._apply_gt_instance_state(new_face_instance)
+
+    def _split_gt_selection_to_new_instance(self):
+        if not self._ensure_gt_instance_state() or not self.selected_face_indices_gt:
+            return
+        ids = self._selected_gt_instance_ids()
+        if len(ids) != 1:
+            self.msgBox.warning(self, "警告", "拆分时请选择同一个实例中的面")
+            return
+        new_id = self._next_gt_instance_id()
+        new_face_instance = list(self.current_gt_face_instance or [])
+        for face_idx in self.selected_face_indices_gt:
+            if 0 <= face_idx < len(new_face_instance):
+                new_face_instance[face_idx] = new_id
+        self._apply_gt_instance_state(new_face_instance)
+
+    def _edit_gt_selected_instance_class(self):
+        if not self._ensure_gt_instance_state():
+            return
+        ids = self._selected_gt_instance_ids()
+        target_id = ids[0] if len(ids) == 1 else self._prompt_gt_instance_id("修改实例类别")
+        if target_id is None:
+            return
+        options, option_map = self._label_options()
+        selected_text, ok = QInputDialog.getItem(self, "修改实例类别", "选择类别", options, 0, False)
+        if not ok:
+            return
+        new_class = int(selected_text.split(":", 1)[0])
+        new_instances = []
+        target_faces = []
+        for instance in self.current_gt_instances:
+            item = dict(instance)
+            if int(item["instance_id"]) == int(target_id):
+                item["class_id"] = new_class
+                target_faces = [int(idx) for idx in item.get("face_indices", [])]
+            new_instances.append(item)
+        if target_faces:
+            reply = QMessageBox.question(self, "同步面标签", "是否同步修改该实例内face语义标签？")
+            if reply == QMessageBox.Yes:
+                self._apply_gt_label_change_batch(target_faces, [new_class for _ in target_faces])
+        self._apply_gt_instance_state(list(self.current_gt_face_instance or []), new_instances)
 
     def _edit_selected_face_gt_label(self):
         if not self.selected_face_indices_gt:  # 未选中面
@@ -1877,6 +2263,35 @@ class App(QDialog):  # 主界面
                 return template_data
         return [int(x) for x in labels]
 
+    def _build_versioned_label_payload(
+        self,
+        labels: List[int],
+        face_instance: Optional[List[int]],
+        instances: Optional[List[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        payload = {
+            "schema_version": 2,
+            "labels": [int(x) for x in labels],
+            "labels_base": [int(x) for x in labels],
+            "version_id": 1,
+            "versions": [],
+            "domains": {
+                "geometry": {
+                    "face": [int(x) for x in labels],
+                }
+            },
+        }
+        if face_instance is not None and len(face_instance) == len(labels):
+            payload["domains"]["instance"] = {
+                "face_instance": [int(x) for x in face_instance],
+                "instances": [dict(item) for item in (instances or [])],
+            }
+            payload["domains"]["instance_base"] = {
+                "face_instance": [int(x) for x in face_instance],
+                "instances": [dict(item) for item in (instances or [])],
+            }
+        return payload
+
     def savePredictionLabels(self):
         if not self.file_name:  # 未加载STEP
             self.msgBox.warning(self, "警告", "请先加载STEP文件")
@@ -1899,8 +2314,12 @@ class App(QDialog):  # 主界面
                 template_format = None
 
         if template_data is None or template_format is None:
-            template_data = [0 for _ in self.current_pred_labels]
-            template_format = "list"
+            template_data = self._build_versioned_label_payload(
+                self.current_pred_labels,
+                self.current_pred_face_instance,
+                self.current_pred_instances,
+            )
+            template_format = "dict"
             suffix = ".json"
 
         default_dir = Path(self._dialog_dir("save_pred", self.label_dir or Path(self.file_name).parent))
@@ -1917,11 +2336,18 @@ class App(QDialog):  # 主界面
 
         save_path = Path(save_path_str)
         self._set_dialog_dir("save_pred", save_path.parent)  # 记录目录
-        data_to_save = self._build_label_data_with_format(
-            labels=self.current_pred_labels,
-            label_format=template_format,
-            template_data=template_data,
-        )
+        if self.current_pred_face_instance is not None:
+            data_to_save = self._build_versioned_label_payload(
+                self.current_pred_labels,
+                self.current_pred_face_instance,
+                self.current_pred_instances,
+            )
+        else:
+            data_to_save = self._build_label_data_with_format(
+                labels=self.current_pred_labels,
+                label_format=template_format,
+                template_data=template_data,
+            )
 
         try:
             if save_path.suffix.lower() == ".pkl":
@@ -1992,6 +2418,7 @@ class App(QDialog):  # 主界面
                 geometry = domains.get("geometry")
                 if isinstance(geometry, dict):
                     geometry["face"] = [int(x) for x in labels]
+            self._ensure_payload_instance_fields()
             if ops and append_version:
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 append_label_version(
@@ -2023,6 +2450,8 @@ class App(QDialog):  # 主界面
             return
         if self.gt_version_preview_active:
             self.gt_session_base_labels = list(self.current_gt_labels)
+            self.gt_session_base_face_instance = list(self.current_gt_face_instance or [])
+            self.gt_session_base_instances = [dict(item) for item in self.current_gt_instances]
             self.gt_version_preview_active = False
         updated_indices: List[int] = []
         old_labels: List[int] = []
@@ -2076,6 +2505,35 @@ class App(QDialog):  # 主界面
             next_labels.append(int(new_label))
         return self._build_ops_from_pairs(indices, prev_labels, next_labels)
 
+    def _build_ops_from_instance_arrays(
+        self,
+        old_face_instance: List[int],
+        new_face_instance: List[int],
+        old_instances: List[Dict[str, Any]],
+        new_instances: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        old_face = [int(value) for value in (old_face_instance or [])]
+        new_face = [int(value) for value in (new_face_instance or [])]
+        if len(old_face) != len(new_face):
+            if not old_face:
+                old_face = [-1 for _ in new_face]
+            elif not new_face:
+                new_face = [-1 for _ in old_face]
+            else:
+                return []
+        old_items = [dict(item) for item in (old_instances or [])]
+        new_items = [dict(item) for item in (new_instances or [])]
+        return build_instance_change_ops(old_face, new_face, old_items, new_items)
+
+    def _gt_instance_state_changed(self) -> bool:
+        current_face = [int(value) for value in (self.current_gt_face_instance or [])]
+        base_face = [int(value) for value in (self.gt_session_base_face_instance or [])]
+        if current_face != base_face:
+            return True
+        current_instances = [dict(item) for item in self.current_gt_instances]
+        base_instances = [dict(item) for item in self.gt_session_base_instances]
+        return current_instances != base_instances
+
     def _update_gt_session_dirty(self):
         if self.current_gt_labels is None or self.gt_session_base_labels is None:
             self.gt_session_dirty = False
@@ -2083,10 +2541,11 @@ class App(QDialog):  # 主界面
         if len(self.current_gt_labels) != len(self.gt_session_base_labels):
             self.gt_session_dirty = True
             return
-        self.gt_session_dirty = any(
+        labels_changed = any(
             int(a) != int(b)
             for a, b in zip(self.current_gt_labels, self.gt_session_base_labels)
         )
+        self.gt_session_dirty = labels_changed or self._gt_instance_state_changed()
 
     def _commit_gt_session_changes(self):
         if not self.gt_session_dirty:
@@ -2102,11 +2561,21 @@ class App(QDialog):  # 主界面
             old_labels=self.gt_session_base_labels,
             new_labels=self.current_gt_labels,
         )
+        ops.extend(
+            self._build_ops_from_instance_arrays(
+                old_face_instance=self.gt_session_base_face_instance or [],
+                new_face_instance=self.current_gt_face_instance or [],
+                old_instances=self.gt_session_base_instances,
+                new_instances=self.current_gt_instances,
+            )
+        )
         if not ops:
             self.gt_session_dirty = False
             return
         self._save_gt_labels(self.current_gt_labels, ops=ops, append_version=True)
         self.gt_session_base_labels = list(self.current_gt_labels)
+        self.gt_session_base_face_instance = list(self.current_gt_face_instance or [])
+        self.gt_session_base_instances = [dict(item) for item in self.current_gt_instances]
         self.gt_session_dirty = False
 
     def stepListItemClicked(self):
