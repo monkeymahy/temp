@@ -172,13 +172,14 @@ python v2\utils\offline_rotate_augment.py --input-root C:\Data\SF-JSON --output-
 
 可视化工具支持：
 
+- 只加载完整版本标签 dict，不直接加载纯 list、MFInstSeg 原始标签或训练快照，避免原始标签被可视化保存逻辑污染。
 - 加载 `labels_full` 中的 `domains.geometry.face` 和 `domains.instance`。
 - 按实例 ID 或语义类别着色。
 - GT / Prediction 实例列表展示和点击选面。
 - 新建、加入、移出、合并、拆分实例，以及修改实例类别。
 - 保存时将本次会话修改追加到 `versions`，支持 face label 和 instance label 一起回放。
 
-推荐流程是：先用模型或 MFInstSeg 标签生成 `labels_full`，在可视化工具中检查和修订，再导出 `labels_train/<export_id>` 训练快照。
+推荐流程是：先用模型或 MFInstSeg 标签生成 `labels_full`，在可视化工具中检查和修订，再导出 `labels_train/<export_id>` 训练快照。若手上只有 MFInstSeg 原始标签，必须先运行 `create_full_labels_from_train_labels.py` 转换，不能直接把原始标签目录作为可视化 GT 标签目录。
 
 ## 6. 快速验证
 

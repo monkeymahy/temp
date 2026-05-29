@@ -125,6 +125,7 @@ class App(QDialog):  # 主界面
         self.gt_label_path: Optional[Path] = None  # 当前GT文件路径
         self.gt_label_format: Optional[str] = None  # 当前GT格式
         self.gt_label_data = None  # 当前GT原始数据
+        self.gt_label_load_error: Optional[str] = None  # GT标签加载错误
         self.pred_label_path: Optional[Path] = None  # 当前预测保存路径
         self.pred_label_format: Optional[str] = None  # 当前预测保存格式
         self.pred_label_data = None  # 当前预测模板数据
@@ -1144,7 +1145,7 @@ class App(QDialog):  # 主界面
 
         labels = self._load_gt_labels(label_path)  # 读取GT标签
         if labels is None:  # 解析失败
-            self.msgBox.warning(self, "警告", "GT标签格式无法解析")  # 提示
+            self.msgBox.warning(self, "警告", self.gt_label_load_error or "GT标签格式无法解析")  # 提示
             return  # 直接返回
         if len(labels) != len(self.faces_list):  # 长度不一致
             self.msgBox.warning(self, "警告", "GT标签数量与面数量不一致")  # 提示
@@ -1176,16 +1177,61 @@ class App(QDialog):  # 主界面
         candidates = sorted(candidates, key=lambda p: (len(p.stem), p.name.lower()))  # 选最短且稳定
         return candidates[0]  # 返回最优匹配
 
+    def _validate_full_version_label_payload(self, label_data: Any) -> List[str]:
+        errors: List[str] = []
+        if not isinstance(label_data, dict):
+            return ["可视化工具只允许加载完整版本标签 dict；请先用转换脚本生成 labels_full，避免污染原始标签。"]
+        if not isinstance(label_data.get("labels"), list):
+            errors.append("缺少 labels list")
+        if not isinstance(label_data.get("labels_base"), list):
+            errors.append("缺少 labels_base list")
+        try:
+            int(label_data.get("version_id"))
+        except Exception:
+            errors.append("缺少可解析的 version_id")
+        if not isinstance(label_data.get("versions"), list):
+            errors.append("缺少 versions list")
+
+        domains = label_data.get("domains")
+        if not isinstance(domains, dict):
+            errors.append("缺少 domains dict")
+            return errors
+        geometry = domains.get("geometry")
+        if not isinstance(geometry, dict) or not isinstance(geometry.get("face"), list):
+            errors.append("缺少 domains.geometry.face list")
+        instance = domains.get("instance")
+        if instance is not None:
+            if not isinstance(instance, dict):
+                errors.append("domains.instance 必须是 dict")
+            else:
+                if "face_instance" in instance and not isinstance(instance.get("face_instance"), list):
+                    errors.append("domains.instance.face_instance 必须是 list")
+                if "instances" in instance and not isinstance(instance.get("instances"), list):
+                    errors.append("domains.instance.instances 必须是 list")
+        return errors
+
     def _load_gt_labels(self, label_path: Path) -> Optional[List[int]]:
+        self.gt_label_load_error = None
         try:  # 读取文件
             label_data = load_json_or_pkl(label_path)  # 读取json或pkl
-        except Exception:  # 读取失败
+        except Exception as exc:  # 读取失败
+            self.gt_label_load_error = f"GT标签读取失败: {exc}"
             return None  # 返回空
+        format_errors = self._validate_full_version_label_payload(label_data)
+        if format_errors:
+            self.gt_label_load_error = (
+                "禁止加载非完整版本标签到可视化工具。\n"
+                f"文件: {label_path}\n"
+                "原因: " + "; ".join(format_errors[:5]) + "\n"
+                "请先使用 v2\\utils\\create_full_labels_from_train_labels.py 生成 labels_full。"
+            )
+            return None
         prev_label_path = self.gt_label_path
         self.gt_label_path = label_path  # 记录路径
         payload = normalize_label_payload(label_data)
         labels = extract_labels_from_payload(payload)
         if labels is None:
+            self.gt_label_load_error = "GT标签格式无法解析: 未找到 face labels"
             return None
         try:
             instance_payload = normalize_instance_payload(label_data, num_faces=len(labels), allow_empty=True)
@@ -2011,7 +2057,7 @@ class App(QDialog):  # 主界面
         if self.current_gt_labels is None or self.gt_label_path != label_path:
             labels = self._load_gt_labels(label_path)  # 读取GT标签
             if labels is None:
-                self.msgBox.warning(self, "警告", "GT标签格式无法解析")  # 提示
+                self.msgBox.warning(self, "警告", self.gt_label_load_error or "GT标签格式无法解析")  # 提示
                 return  # 直接返回
             self.current_gt_labels = labels  # 缓存
 
