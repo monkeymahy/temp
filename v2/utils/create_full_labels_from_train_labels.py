@@ -4,7 +4,7 @@ import pickle
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
@@ -21,20 +21,24 @@ def _labels_from_seg(seg: Any) -> List[int]:
     raise ValueError("seg must be a dict or list")
 
 
-def _extract_mfinstseg_label_dict(data: Any) -> Optional[Dict[str, Any]]:
+def _extract_mfinstseg_record(data: Any) -> Optional[Tuple[Optional[str], Dict[str, Any]]]:
     if isinstance(data, dict) and "seg" in data:
-        return data
+        return None, data
     if isinstance(data, list):
         if len(data) == 2 and isinstance(data[1], dict) and "seg" in data[1]:
-            return data[1]
+            sample_id = str(data[0]) if data[0] is not None else None
+            return sample_id, data[1]
         if data and isinstance(data[0], list) and len(data[0]) == 2:
-            item = data[0][1]
+            sample_id, item = data[0]
             if isinstance(item, dict) and "seg" in item:
-                return item
+                return str(sample_id) if sample_id is not None else None, item
     return None
 
 
-def load_train_label(path: Path) -> Tuple[List[int], Optional[Dict[str, Any]], str]:
+def load_train_label(
+    path: Path,
+    background_labels: Sequence[int],
+) -> Tuple[str, List[int], Optional[Dict[str, Any]], str]:
     if path.suffix.lower() == ".pkl":
         with open(path, "rb") as f:
             data = pickle.load(f)
@@ -42,21 +46,27 @@ def load_train_label(path: Path) -> Tuple[List[int], Optional[Dict[str, Any]], s
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-    label_dict = _extract_mfinstseg_label_dict(data)
-    if label_dict is not None:
+    record = _extract_mfinstseg_record(data)
+    if record is not None:
+        sample_id, label_dict = record
         labels = _labels_from_seg(label_dict["seg"])
         instance_payload = None
         if "inst" in label_dict:
-            instance_payload = adj_to_instance_payload(label_dict["inst"], labels, background_labels={0})
-        return labels, instance_payload, "mfinstseg_seg_inst"
+            instance_payload = adj_to_instance_payload(
+                label_dict["inst"],
+                labels,
+                background_labels={int(label) for label in background_labels},
+            )
+        return sample_id or path.stem, labels, instance_payload, "mfinstseg_seg_inst"
 
     if isinstance(data, list):
-        return [int(label) for label in data], None, "train_label_list"
+        return path.stem, [int(label) for label in data], None, "train_label_list"
     raise ValueError(f"unsupported train label format: {path}")
 
 
 def build_full_label_payload(
     labels: List[int],
+    sample_id: str,
     source_path: Path,
     author: str,
     source_format: str,
@@ -64,6 +74,8 @@ def build_full_label_payload(
 ) -> Dict[str, Any]:
     labels = [int(label) for label in labels]
     payload = {
+        "schema_version": 2,
+        "sample_id": sample_id,
         "labels": labels,
         "labels_base": list(labels),
         "version_id": 1,
@@ -101,6 +113,7 @@ def convert_labels(
     output_dir: Path,
     overwrite: bool,
     author: str,
+    background_labels: Sequence[int],
 ) -> None:
     if not labels_dir.exists():
         raise FileNotFoundError(f"train labels dir not found: {labels_dir}")
@@ -113,16 +126,20 @@ def convert_labels(
 
     items: List[Dict[str, Any]] = []
     for label_path in label_files:
-        labels, instance_payload, source_format = load_train_label(label_path)
+        sample_id, labels, instance_payload, source_format = load_train_label(
+            label_path,
+            background_labels=background_labels,
+        )
         payload = build_full_label_payload(
             labels,
+            sample_id=sample_id,
             source_path=label_path,
             author=author,
             source_format=source_format,
             instance_payload=instance_payload,
         )
 
-        out_path = output_dir / f"{label_path.stem}.json"
+        out_path = output_dir / f"{sample_id}.json"
         if out_path.exists() and not overwrite:
             raise FileExistsError(f"output label exists: {out_path}")
 
@@ -131,7 +148,7 @@ def convert_labels(
 
         items.append(
             {
-                "sample_id": label_path.stem,
+                "sample_id": sample_id,
                 "source_label_path": str(label_path),
                 "label_path": str(out_path),
                 "version_id": 1,
@@ -155,10 +172,17 @@ def convert_labels(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create labels_full files from pure list train labels.")
-    parser.add_argument("--labels-dir", required=True, help="Directory containing pure list train labels.")
+    parser = argparse.ArgumentParser(
+        description="Create versioned labels_full files from train labels or MFInstSeg-style labels."
+    )
+    parser.add_argument("--labels-dir", required=True, help="Directory containing train label json/pkl files.")
     parser.add_argument("--output-dir", required=True, help="Output labels_full directory.")
     parser.add_argument("--author", default="generated", help="Author name recorded in full label payload.")
+    parser.add_argument(
+        "--background-labels",
+        default="0",
+        help="Comma separated background label ids used when converting inst adjacency.",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing full label files.")
     return parser.parse_args()
 
@@ -170,6 +194,11 @@ def main() -> None:
         output_dir=Path(args.output_dir),
         overwrite=args.overwrite,
         author=args.author,
+        background_labels=[
+            int(item.strip())
+            for item in str(args.background_labels).split(",")
+            if item.strip()
+        ],
     )
 
 
