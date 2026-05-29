@@ -175,7 +175,7 @@ python v2\utils\offline_rotate_augment.py --input-root C:\Data\SF-JSON --output-
 
 - 只加载完整版本标签 dict，不直接加载纯 list、MFInstSeg 原始标签或训练快照，避免原始标签被可视化保存逻辑污染。
 - 加载 `labels_full` 中的 `domains.geometry.face` 和 `domains.instance`。
-- 按实例 ID 或语义类别着色。
+- 默认全灰显示；选择类别、实例或 face 后，按当前模式对选中对象着色。
 - GT / Prediction 实例列表展示和点击选面。
 - 新建、加入、移出、合并、拆分实例，以及修改实例类别。
 - GT 编辑先进入内存和撤销/重做栈，不实时落盘。

@@ -313,8 +313,8 @@ python v2\main.py test --data SFDataModule --config v2\configs\sf.yaml --ckpt_pa
 ### 6.2 展示能力
 
 - GT / Prediction 双视口。
-- 语义类别着色。
-- 实例 ID 着色。
+- 默认全灰显示。
+- 选择类别、实例或 face 后，按当前着色模式对选中对象着色。
 - GT 实例列表。
 - Prediction 实例列表。
 - 点击实例列表可选中对应 faces。

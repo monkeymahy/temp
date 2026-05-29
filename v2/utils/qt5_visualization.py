@@ -133,6 +133,7 @@ class App(QDialog):  # 主界面
         self._viewport_press_pos = {"gt": None, "pred": None}  # 视口左键按下位置
         self._viewport_dragging = {"gt": False, "pred": False}  # 视口是否处于拖拽旋转
         self._suppress_next_select = False  # 拖拽释放后抑制一次选择回调
+        self._handling_maximize = False  # 防止最大化状态处理重入
         self.undo_stack: List[Dict] = []  # 撤销栈
         self.redo_stack: List[Dict] = []  # 重做栈
         self.dialog_dirs: Dict[str, Optional[Path]] = {  # 各类对话框最近目录
@@ -198,7 +199,7 @@ class App(QDialog):  # 主界面
             | Qt.WindowCloseButtonHint
         )  # 强制使用可最大化的标准窗口标志
         self.setWindowTitle(self.title)  # 设置窗口标题
-        self.setGeometry(self.left, self.top, self.width, self.height)  # 设置位置与大小
+        self._set_window_geometry_clamped(self.width, self.height)  # 设置位置与大小
         self.setMinimumSize(900, 600)  # 设置最小尺寸
         self.setMaximumSize(16777215, 16777215)  # 允许系统最大化
         self.createHorizontalLayout()  # 创建布局
@@ -369,9 +370,12 @@ class App(QDialog):  # 主界面
         action_medium.triggered.connect(lambda: self._resize_window(1366, 900))  # 绑定事件
         action_large = QAction("大", self)  # 大尺寸
         action_large.triggered.connect(lambda: self._resize_window(1600, 1000))  # 绑定事件
+        action_fit_screen = QAction("最大可用区域", self)  # 屏幕内最大尺寸
+        action_fit_screen.triggered.connect(self._maximize_to_available_screen)  # 绑定事件
         window_menu.addAction(action_small)  # 添加菜单项
         window_menu.addAction(action_medium)  # 添加菜单项
         window_menu.addAction(action_large)  # 添加菜单项
+        window_menu.addAction(action_fit_screen)  # 添加菜单项
 
         # 创建窗口大小调整按钮
         self.window_button = QToolButton(self)  # 工具按钮
@@ -615,7 +619,33 @@ class App(QDialog):  # 主界面
         self._update_window_title()  # 更新标题
 
     def _resize_window(self, width: int, height: int):
-        self.resize(width, height)  # 调整窗口尺寸
+        self._set_window_geometry_clamped(width, height)  # 调整窗口尺寸
+
+    def _available_geometry(self):
+        screen = self.screen() if hasattr(self, "screen") else None
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is not None:
+            return screen.availableGeometry()
+        return QApplication.desktop().availableGeometry(self)
+
+    def _safe_window_geometry(self):
+        available = self._available_geometry()
+        if available.width() > 40 and available.height() > 60:
+            return available.adjusted(8, 32, -8, -8)
+        return available
+
+    def _set_window_geometry_clamped(self, width: int, height: int):
+        available = self._safe_window_geometry()
+        window_width = min(int(width), int(available.width()))
+        window_height = min(int(height), int(available.height()))
+        x = int(available.x() + max(0, (available.width() - window_width) // 2))
+        y = int(available.y() + max(0, (available.height() - window_height) // 2))
+        self.setGeometry(x, y, window_width, window_height)
+
+    def _maximize_to_available_screen(self):
+        available = self._safe_window_geometry()
+        self.setGeometry(available)
 
     def _update_window_title(self):
         config_name = self._short_name(self.config_path)  # 配置文件名
@@ -965,19 +995,6 @@ class App(QDialog):  # 主界面
             and isinstance(face_instance, list)
             and len(face_instance) == len(self.faces_list)
         )
-        if has_valid_instances:
-            for face_idx, instance_id in enumerate(face_instance):
-                instance_id = int(instance_id)
-                if instance_id < 0:
-                    continue
-                face_obj = self.faces_list[face_idx]
-                ais_shape.SetCustomColor(face_obj, rgb_color(*self._instance_color(instance_id)))
-                ais_shape.SetCustomTransparency(face_obj, 0.0)
-        elif has_valid_labels and self.instance_color_mode == "semantic":
-            for face_idx, class_idx in enumerate(labels):
-                face_obj = self.faces_list[face_idx]
-                ais_shape.SetCustomColor(face_obj, rgb_color(*self._class_color(int(class_idx))))
-                ais_shape.SetCustomTransparency(face_obj, 0.0)
 
         selected_face_indices = self._get_selection(target)
         for face_idx in selected_face_indices:
@@ -985,7 +1002,8 @@ class App(QDialog):  # 主界面
                 continue
             face_obj = self.faces_list[face_idx]
             if has_valid_instances:
-                color = self._selection_highlight_color()
+                instance_id = int(face_instance[face_idx])
+                color = self._instance_color(instance_id) if instance_id >= 0 else self._selection_highlight_color()
             elif has_valid_labels:
                 class_idx = int(labels[face_idx])
                 color = self._class_color(class_idx)
@@ -1771,6 +1789,21 @@ class App(QDialog):  # 主界面
     def closeEvent(self, event):
         self._commit_gt_session_changes()
         super().closeEvent(event)
+
+    def changeEvent(self, event):
+        if (
+            event.type() == QEvent.WindowStateChange
+            and self.isMaximized()
+            and not self._handling_maximize
+        ):
+            self._handling_maximize = True
+            try:
+                self.setWindowState(Qt.WindowNoState)
+                self._maximize_to_available_screen()
+            finally:
+                self._handling_maximize = False
+            return
+        super().changeEvent(event)
 
     def _sync_view_from_to(self, source: str, target: str):
         if self.view_sync_lock:  # 防止重入
