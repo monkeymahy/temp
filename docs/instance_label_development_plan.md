@@ -39,14 +39,17 @@ labels_full/*.json
 - `face_instance`: 每个 face 对应一个 `instance_id`，背景为 `-1`。
 - `instances`: 实例对象列表，用于 UI 展示和编辑。
 
-训练标签使用一种矩阵表达：
+训练标签使用 MFInstSeg 风格的轻量结构：
 
+- 外层为单元素 list：`[[sample_id, label_dict]]`。
+- `label_dict.seg` 为 face 索引字符串到语义类别的映射。
 - `inst`: `N x N` 同实例邻接矩阵，`inst[i][j] = 1` 表示 face `i` 和 face `j` 同实例。
+- 不导出 `bottom` 字段。
 
 实现时必须提供双向转换：
 
 - `face_instance + instances -> inst`
-- `inst + seg list -> face_instance + instances`
+- `inst + seg dict/list -> face_instance + instances`
 
 ## 3. 模块拆分
 
@@ -108,6 +111,7 @@ def append_instance_version(payload: dict, author: str, ops: list[dict], timesta
 目标文件：
 
 - `v2/utils/export_train_labels.py`
+- `v2/utils/create_full_labels_from_train_labels.py`
 
 新增 CLI 参数：
 
@@ -120,18 +124,24 @@ def append_instance_version(payload: dict, author: str, ops: list[dict], timesta
 导出策略：
 
 - `seg_only`：保持当前行为，导出纯 face label list。
-- `seg_inst`：导出字典，其中 `seg` 使用 list 保存每个 face 的语义标签：
+- `seg_inst`：按 MFInstSeg 风格导出单样本 list，只保留 `seg` 和 `inst`，不包含 `bottom`：
 
 ```json
-{
-  "seg": [0, 1, 1, 0],
-  "inst": [[0, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]]
-}
+[
+  [
+    "graphs_00000001",
+    {
+      "seg": {"0": 0, "1": 1, "2": 1, "3": 0},
+      "inst": [[0, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]]
+    }
+  ]
+]
 ```
 
 manifest 增加：
 
 - `task_mode`
+- `label_format`
 - `labels_full_dir`
 - `class_mapping`
 - `background_labels`
@@ -148,7 +158,7 @@ manifest 增加：
 验收：
 
 - 使用当前 `seg_only` 配置导出结果与旧版本一致。
-- 使用 `seg_inst` 能生成 `seg + inst` 文件和 manifest。
+- 使用 `seg_inst` 能生成 MFInstSeg 风格 `[[sample_id, {"seg": ..., "inst": ...}]]` 文件和 manifest。
 - 训练快照导出后再次修改 `labels_full` 不影响已导出的文件。
 
 ### 3.3 数据加载
@@ -171,10 +181,11 @@ data:
   - 读取纯 list 或完整标签中的 face label。
   - 写入 `graph.ndata["y"]`。
 - `seg_inst`：
-  - 读取训练导出的 `seg` 和 `inst`。
-  - `seg` 按 list 读取，直接转为 `graph.ndata["y"]`。
+  - 读取训练导出的 MFInstSeg 风格 `seg` 和 `inst`。
+  - `seg` 按 face 索引字符串 dict 读取，直接转为 `graph.ndata["y"]`。
   - 写入 `graph.ndata["y"]`。
   - 样本字典增加 `inst_y`。
+  - 如果遇到历史 MFInstSeg 文件中的 `bottom` 字段，训练加载忽略该字段。
 
 `SFDataModule._collate` 行为：
 

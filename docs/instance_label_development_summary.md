@@ -36,6 +36,7 @@
 修改：
 
 - `v2/utils/export_train_labels.py`
+- `v2/utils/create_full_labels_from_train_labels.py`
 
 新增参数：
 
@@ -54,11 +55,20 @@
 `seg_inst` 导出：
 
 ```json
-{
-  "seg": [0, 1, 1, 0],
-  "inst": [[0, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]]
-}
+[
+  [
+    "graphs_00000001",
+    {
+      "seg": {"0": 0, "1": 1, "2": 1, "3": 0},
+      "inst": [[0, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]]
+    }
+  ]
+]
 ```
+
+该格式对齐 MFInstSeg：外层为单样本 list，内部是 `[sample_id, label_dict]`；`label_dict` 只保留 `seg` 与 `inst`，不导出 `bottom`。
+导出 manifest 会写入 `label_format=mfinstseg_seg_inst`，便于后续区分训练快照格式。
+从训练标签反向生成完整标签的工具也已兼容该格式，会从 `inst` 还原 `domains.instance`，历史纯 list 标签仍按旧逻辑处理。
 
 ### 2.3 数据加载
 
@@ -83,6 +93,8 @@ data:
   "num_faces": num_faces_tensor
 }
 ```
+
+`seg_inst` 加载时直接消费 MFInstSeg 风格的 `seg` dict 和 `inst` 邻接矩阵；若读取历史 MFInstSeg 标签中存在 `bottom`，训练链路会忽略该字段。
 
 ### 2.4 模型
 
@@ -194,7 +206,7 @@ instance version replay ok
 
 ## 5. 后续建议
 
-1. 用一小批真实 `labels_full` 跑一次 `seg_inst` 导出，检查 face 数、`seg` 长度、`inst` 矩阵尺寸是否完全一致。
+1. 用一小批真实 `labels_full` 跑一次 `seg_inst` 导出，检查输出是否为 MFInstSeg 风格、无 `bottom`、`seg` key 覆盖 face 数、`inst` 矩阵尺寸一致。
 2. 在真实样本上打开 Qt 工具做一次人工验收：实例着色、实例列表、右键编辑、保存、重新加载、版本回放。
 3. 用 1-2 个 batch 跑一次 `task_mode=seg_inst` 训练 smoke test，确认 loss、metric、padding mask 都正常。
 4. 后续如果需要更强的实例推理效果，再补充连通域过滤、最小实例面数、类别一致性等后处理策略。

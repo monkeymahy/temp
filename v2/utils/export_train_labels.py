@@ -111,10 +111,15 @@ def _build_train_payload(
     errors = validate_instance_struct(instance_payload, len(mapped_labels))
     if errors:
         raise ValueError(f"invalid instance label for {sample_id}: {'; '.join(errors)}")
-    return {
-        "seg": mapped_labels,
-        "inst": face_instance_to_adj(instance_payload["face_instance"]),
-    }
+    return [
+        [
+            sample_id,
+            {
+                "seg": _seg_list_to_dict(mapped_labels),
+                "inst": face_instance_to_adj(instance_payload["face_instance"]),
+            },
+        ]
+    ]
 
 
 def export_labels(
@@ -211,6 +216,7 @@ def export_labels(
     manifest_out = {
         "export_id": export_id,
         "task_mode": task_mode,
+        "label_format": "list" if task_mode == "seg_only" else "mfinstseg_seg_inst",
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         "source_manifest": str(manifest_path) if manifest_path is not None else None,
         "labels_full_dir": str(labels_full_dir),

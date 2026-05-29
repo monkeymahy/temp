@@ -86,7 +86,7 @@ def extract_instance_from_payload(payload: Any) -> Optional[Dict[str, Any]]:
 
 
 def normalize_instance_payload(
-    payload: Dict[str, Any],
+    payload: Any,
     num_faces: Optional[int] = None,
     *,
     allow_empty: bool = True,
@@ -107,7 +107,7 @@ def normalize_instance_payload(
             )
         instances = instance.get("instances")
         if not isinstance(instances, list):
-            labels = _labels_from_seg(payload.get("labels") or payload.get("seg"), len(face_instance))
+            labels = _labels_from_payload(payload, len(face_instance))
             instances = build_instances_from_face_instance(face_instance, labels or [])
         else:
             instances = normalize_instances(instances)

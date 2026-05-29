@@ -37,8 +37,10 @@ from v2.utils.data_utils import (
     resolve_label_file,
     resolve_training_label_dir,
 )
+from v2.utils.instance_label_utils import extract_instance_from_payload
 from v2.utils.instance_label_utils import normalize_instance_payload
 from v2.utils.instance_label_utils import face_instance_to_adj
+from v2.utils.instance_label_utils import validate_inst_adj
 
 
 class SFDataset(Dataset):  # 显式继承Dataset，增强兼容性与可读性
@@ -145,19 +147,26 @@ class SFDataset(Dataset):  # 显式继承Dataset，增强兼容性与可读性
         one_graph["graph"].ndata["y"] = torch.from_numpy(labels_np).long()  # 转为torch.long分类标签
 
         if self.task_mode == "seg_inst":
-            instance_payload = normalize_instance_payload(
-                label_data if isinstance(label_data, dict) else {"labels": labels},
-                num_faces=len(labels_np),
-                allow_empty=False,
-            )
-            inst_adj = np.asarray(
-                face_instance_to_adj(instance_payload["face_instance"]),
-                dtype=np.int32,
-            )
+            instance_data = extract_instance_from_payload(label_data)
+            if isinstance(instance_data, dict) and "inst" in instance_data:
+                inst_adj = np.asarray(instance_data["inst"], dtype=np.int32)
+            else:
+                instance_payload = normalize_instance_payload(
+                    label_data,
+                    num_faces=len(labels_np),
+                    allow_empty=False,
+                )
+                inst_adj = np.asarray(
+                    face_instance_to_adj(instance_payload["face_instance"]),
+                    dtype=np.int32,
+                )
             if inst_adj.shape != (len(labels_np), len(labels_np)):
                 raise ValueError(
                     f"inst label shape {inst_adj.shape} does not match face count {len(labels_np)}: {label_path}"
                 )
+            inst_errors = validate_inst_adj(inst_adj, len(labels_np))
+            if inst_errors:
+                raise ValueError(f"invalid inst label for {label_path}: {'; '.join(inst_errors)}")
             one_graph["inst_y"] = torch.from_numpy(inst_adj).float()
 
         return one_graph  # 返回已附加标签的样本

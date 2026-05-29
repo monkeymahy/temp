@@ -134,23 +134,29 @@
 训练导出应根据任务模式生成不同结构：
 
 - `seg_only`：导出当前兼容格式，即纯面标签列表。
-- `seg_inst`：导出包含 `seg` 与 `inst` 的字典，其中 `seg` 使用 list 保存每个 face 的语义标签。
+- `seg_inst`：按 MFInstSeg 风格导出单样本 list，外层保存 `[sample_id, label_dict]`，`label_dict` 只包含 `seg` 与 `inst`，不导出 `bottom`。
 
 训练导出单样本格式：
 
 ```json
-{
-  "seg": [0, 1, 1, 0],
-  "inst": [[0, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]]
-}
+[
+  [
+    "graphs_00000001",
+    {
+      "seg": {"0": 0, "1": 1, "2": 1, "3": 0},
+      "inst": [[0, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]]
+    }
+  ]
+]
 ```
 
 导出规则：
 
-- `seg[i]` 表示 face `i` 的语义类别；长度必须等于 face 数。
+- `seg[str(i)]` 表示 face `i` 的语义类别；key 必须覆盖 `0..N-1`。
 - `inst[i][j] = 1` 表示 face `i` 和 face `j` 属于同一个实例。
 - 同一个实例内对角线应为 `1`；背景面对应行列应为 `0`。
 - 若实例只有单面，也应保留该 face 的对角线 `1`，否则训练时会被误认为背景。
+- 不导出 `bottom` 字段；当前任务只消费面语义 `seg` 和实例邻接 `inst`。
 - 导出 manifest 必须记录 `sample_id`、完整标签路径、使用版本、导出时间、导出模式、类别映射。
 
 ## 4. 可视化工具需求
@@ -218,7 +224,8 @@ data:
 加载要求：
 
 - 样本 face 数必须与 `seg`、`face_instance` 或 `inst` 一致。
-- 支持从训练导出的 `inst` 邻接矩阵直接读取。
+- 支持从训练导出的 MFInstSeg 风格 `[sample_id, {"seg": ..., "inst": ...}]` 中直接读取 `seg` 和 `inst`。
+- 训练加载时忽略历史 MFInstSeg 文件中的 `bottom` 字段；本项目导出的新训练标签不生成 `bottom`。
 - 支持从 `face_instance` 动态生成 `inst` 邻接矩阵。
 - batch 时按当前最大 face 数 padding 成 `[B, N, N]`，并提供有效 face mask，避免 padding 参与指标。
 - `seg_only` 训练不得强依赖实例字段。
@@ -257,6 +264,7 @@ python v2/utils/export_train_labels.py \
 
 - `export_id`
 - `task_mode`
+- `label_format`
 - `labels_full_dir`
 - `sample_id`
 - `version_id`
